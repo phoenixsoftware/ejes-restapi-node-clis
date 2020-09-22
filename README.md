@@ -1,6 +1,6 @@
 # (E)JES REST API Manager Sample CLIs
 
-This repository contains CLI program that use the (E)JES REST API written in node.js.  Its components are *sample
+This repository contains CLI program that use the (E)JES V6R0 REST API written in node.js.  Its components are *sample
 programs* provided to aid and enhance your experience using our (E)JES product.  These CLIs compose the npm module
 that is installed by our [Zowe Ejes plug-in](https://github.com/phoenixsoftware/ejes-cli#readme).
 While you can install and/or examine the source code here, you will require a license from Phoenix Software International
@@ -50,7 +50,8 @@ You can also issue the **help** command in *EJES Batch* and use the argument *he
 [(top)](#readme)
 ## Prerequisites
 
-* Ensure OS is up to date
+* (E)JES V6R0 GA installed the host together with all current service.
+* Workstation OS is up to date
 * node
 * npm
 
