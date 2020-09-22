@@ -1,0 +1,43 @@
+# test - To show scheme compile results when starting EJES BATCH or EJES QUERY, remove the space between # and test.
+#
+# Light scheme
+#
+#
+
+#
+# Light background - RESET is required and must be first in the scheme.
+# 
+RESET = WHITEBLACK
+#
+
+# Color choices
+DEBUG    = MAGENTA
+ERROR    = RED
+HILITE   = BROWN
+ITEM     = ORANGE
+INFO     = GREEN
+MSG      = BLUE
+FLAG     = CYAN
+DEFAULT  = OLIVE
+
+# Debug mode object inspection
+# Note that user should never see these colors under normal circumstances
+UTILNAME   = black
+UTILVAL    = magenta
+UTILREGEX  = red
+UTILSTRING = green
+UTILFUNC   = cyan
+UTILDATE   = cyan
+
+#
+# 3279 Color Light Mode mapping for EJES BATCH 'Screen On' output
+#
+ACTIVE3270 = CYAN
+INMENU3270 = GRAY
+HILITE3270 = BROWN
+PARAMS3270 = PINK
+MSGHDR3270 = BLUE
+ISTEXT3270 = BLACK
+ERRORS3270 = RED
+UNDISC3270 = MAGENTA
+FILTER3270 = BLUE 

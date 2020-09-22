@@ -1,0 +1,41 @@
+# test - To show scheme compile results when starting EJES BATCH or EJES QUERY, remove the space between # and test.
+#
+# Null mode: No color changes.  Take defaults.  
+#            To remove inverse and underline, use --no-color instead.
+#
+DEBUG    = 
+ERROR    = 
+HILITE   = 
+ITEM     = 
+INFO     = 
+MSG      = 
+FLAG     = 
+DEFAULT  = 
+
+#
+# Debug mode object inspection
+#
+UTILNAME   = 
+UTILVAL    = 
+UTILDATE   = 
+UTILSTRING =
+UTILFUNC   =
+UTILREGEX  =
+
+#
+# 3279 Color Light Mode mapping for EJES BATCH 'Screen On' output
+#
+ACTIVE3270 = 
+INMENU3270 = 
+HILITE3270 = 
+PARAMS3270 = 
+MSGHDR3270 = 
+ISTEXT3270 = 
+ERRORS3270 = 
+UNDISC3270 = 
+FILTER3270 =
+
+#
+# Default background for terminal
+#
+RESET = 

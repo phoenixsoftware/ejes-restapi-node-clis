@@ -1,0 +1,33 @@
+{
+  "name": "@phoenixsoftware/ejes-restapi-node-clis",
+  "version": "0.2.1",
+  "description": "Enables the EJES QUERY, EJES BATCH, and EJES Profile commands.",
+  "main": "ejes",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "(E)JES",
+    "EJESBATCH",
+    "API"
+  ],
+  "files": [
+    "*",
+    "*.js",
+    "*.txt",
+    "*.scheme"
+  ],
+  "author": "Robert Blum",
+  "license": "ISC",
+  "bin": {
+    "ejes": "ejes",
+    "ejesbatch": "ejesbatch",
+    "ejesInt": "InterruptMonitor",
+    "ejesapi": "api"
+  },
+  "repository": {
+    "type": "git",
+    "url": "s:/Dev/Zowe/Git/Ejesnode"
+  },
+  "dependencies": {}
+}

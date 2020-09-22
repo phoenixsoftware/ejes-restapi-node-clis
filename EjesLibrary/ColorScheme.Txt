@@ -1,0 +1,97 @@
+Color schemes are used to colorize specific parts of the output in EJES QUERY and EJES BATCH.  
+A color scheme file defines how to do that.
+
+COLOR SCHEME FILE STRUCTURE
+
+A scheme file can have four types of statements:
+
+1) A comment beginning with a # symbol.
+2) A blank line.
+3) A color class statement consisting of a color class, an equal sign, and color.  See more 
+   below.
+4) A util inspector style statement consisting of util style class, an equal sign, and util 
+   style.  See more below.
+
+For examples, inspect dark.scheme, light.scheme, and powershell.scheme found in the 
+./EjesLibrary folder.  Do not modify these schemes.  You can, however copy a theme and modify  
+ that file.  White space is ignored.
+
+BUILD AND TEST
+
+For writing a scheme, use a notepad or note app.  For building and testing schemes, use this
+pure node syntax (it doesn't run from Zowe):
+
+node ejes ansischeme <filename>
+
+Example: node ejes ansischeme dark
+
+filename - The name of the theme without the path or extension.
+
+COLOR CLASSES:
+
+The class names hint at what they do, but you can test with dark.scheme to get an idea of 
+what they do.
+
+These classes use foreground colors:
+
+DEBUG   - Debugging messages
+DEFAULT - Default settings
+ERROR   - Error messages
+FLAG    - Flags and options
+HILITE  - Highlighted options
+INFO    - Help information
+ITEM    - A specific item
+MSG     - Host message
+
+These class names also use foreground colors, but define EJES BATCH 3270 screen output 
+colors:
+
+ACTIVE3270 - Highlight for actively executing jobs.
+ERRORS3270 - Host errors and CLI errors.
+FITER3270  - CTRUE and CFALSE colorization.
+HILITE3270 - Highlight problem column values like MAXCOMP.  Also used for filtering. 
+INMENU3270 - Menu items on the menu display.
+ISTEXT3270 - Regular text in tabular data.  Text displayed in browsers.
+MSGHDR3270 - Host messages and header columns
+PARAMS3270 - Parameter columns and partially scrolled into view columns.
+UNDISC3270 - Undefined color.
+
+This class uses a foreground/background color combination:
+RESET - Foreground and background for session (must be first setting in scheme).
+
+FOREGROUND COLORS
+
+Provided color names for the actual characters: black, blue, brown, cyan, gray (or grey), 
+green, lime, magenta, olive, orange, pink, red, skyblue, and yellow.   You may build your own 
+colors by using \x1b[nm format, for example, \x1b32m is green.  You can also use any colors 
+in \x1b[38;2;r;g;bm or \x1b[38;5;nm formats.   For a good reference, see:
+
+https://en.wikipedia.org/wiki/ANSI_escape_code
+Warning: Only use colors.  Specification of underlining, italics, reverse video, clearing the 
+screen, repositioning, etc., will lead to unexpected behaviors.
+
+BACKGROUND / FOREGROUND COLOR COMBOS
+
+Provided foreground background color combinations:
+blackgrey - dark mode black background great for cmd.exe under Windows.
+whiteblack - light mode white background for any platform, but great under Mac Terminal.
+bluewhite - blue background tuned for the specific blue of Windows powershell.
+
+You can build your own by combining combining foreground and background escape sequences, for 
+example: \x1b[40mx1b[37m.  For more guidance, refer to the wikipedia link above.
+
+UTIL INSPECTOR STYLES
+
+When the program displays debugging information, it may also list javascript objects.  
+Unfortunately, node is unaware of the color scheme you are using, or the configuration of 
+your terminal app.  This can lead to unreadable debug information.  You can tune this output 
+using the following three util inspector styles.  Omit them to leave node defaults in place.  
+The style values listed are defined by node and consist of colors and styles.  You may only 
+use those listed.
+
+UTILNAME - Color for names and null values.
+UTILVAL  - Color for numbers and boolean values.
+UTILDATE - Colors for dates.
+
+Available style values: underline, inverse, white, grey, black, blue, cyan, green, magenta, 
+red, and yellow.

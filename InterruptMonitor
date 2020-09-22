@@ -1,0 +1,97 @@
+#!/usr/bin/env node
+// InterruptMonitor - By being spawned as a cmd.exe process, this process can capture CTRL+C interrupts
+//                    when the parent process stdin is paused.  The parent creates a semaphore file that
+//                    is in the work directory during a download, and either the parent or child can
+//                    remove it to signal it is time for the monitor to quit and the download to stop.
+//                    Works only under WIN32 (i.e., Windows).  Does not run in the Zowe process.
+
+/*
+* This program and the accompanying materials are made available under the terms of the
+* Eclipse Public License v2.0 which accompanies this distribution, and is available at
+* https://www.eclipse.org/legal/epl-v20.html
+*
+* SPDX-License-Identifier: EPL-2.0
+*
+* Copyright Contributors to the Zowe Project.
+*
+*/
+
+const fs = require('fs')
+const readline = require('readline');
+require ('./EjesLibrary/debugCodes')
+var rl, timer
+const Reset =      "\x1b[0m"
+const FgCyan =     "\x1b[36m"
+const ejesVersion = 'EJES Interrupt Monitor, a CLI component of (E)Jes.  V0.3.2'
+
+function zFill(n, c) { let s = n.toString(); return '0'.repeat((c || 2) - s.length) + s }
+function msDate() { let dt = new Date(); return zFill(dt.getHours()) + ':' + zFill(dt.getMinutes()) + ':' + zFill(dt.getSeconds()) + '.' + zFill(dt.getMilliseconds(), 3) }
+function output(text) { console.error(FgCyan + msDate() + ': Interrupt Monitor: ' + text + Reset) }
+
+var debug = (parseInt(process.argv[6]) & d_Reserved) > 0
+debug && output(ejesVersion)
+debug && output('Running!   (debug):   ' + debug)
+debug && output('Argument 2 (host):    ' + process.argv[2])
+debug && output('Argument 3 (port):    ' + process.argv[3])
+debug && output('Argument 4 (timeout): ' + (process.argv[4] /1000) + ' seconds')
+debug && output('Argument 5 (file):    ' + process.argv[5])
+debug && output('Argument 6 (debug):   ' + process.argv[6])
+var timeout = parseInt(process.argv[4]), seconds = timeout / 1000
+var semaphoreFile = process.argv[5]
+
+process.exitCode = 1 // EPERM (Something unexpected)
+process.once('exit', (code) => {
+  debug && output('About to exit with code: ' + code)
+  process.exit(code)
+})
+
+function cleanUp() {
+  debug && output('Cleanup: Running')
+  timer && clearInterval(timer)
+  debug && output(seconds + ' second timer off.')
+  if ( rl ) {
+    rl.close()
+    debug && output('Line input object closed.')
+    delete rl
+  }
+  else
+    debug && output('Line input was not on.')
+  process.exit()
+}
+
+rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stderr
+});
+rl.on('SIGINT', () => {
+  output('Control+C on readline.  Cancel request received.  Please wait...')
+  process.exitCode = 4 // EINTR
+  cleanUp()
+})
+process.on('SIGINT', () => { 
+  debug & output('Control+C on process.  Cancel request received.  Please wait...');
+  process.exitCode = 4 // EINTR
+  cleanUp()
+})
+rl.on('line', () => {})
+timer = setTimeout(() => {
+  debug && output(seconds + ' second timer timed out.  Auto-cancelling runaway task.')
+  process.exitCode = 62 // ETIME
+  cleanUp()
+}, timeout)
+
+if (fs.existsSync(semaphoreFile)) {
+  debug && output('File "' + semaphoreFile + '" exists.  Download in process.')
+  fs.watchFile(semaphoreFile, { persistent: false, interval: 200 }, (current) => {
+    if ( current.ctime.valueOf() == 0 ) {
+      process.exitCode = 104 // ECONNRESET
+      debug && output('Semaphore file unlinked.  Download complete.  Exiting.')
+      fs.unwatchFile(semaphoreFile)
+      cleanUp()
+    }
+  })
+} else {
+  debug && output('Semaphore file is not found.  Download was complete.  Exiting.')
+  process.exitCode = 2 //ENOENT
+  cleanUp()
+}

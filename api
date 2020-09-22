@@ -1,0 +1,450 @@
+#!/usr/bin/env node
+//  api - The EJES RESTAPI mapped to command line options.
+
+/*
+* This program and the accompanying materials are made available under the terms of the
+* Eclipse Public License v2.0 which accompanies this distribution, and is available at
+* https://www.eclipse.org/legal/epl-v20.html
+*
+* SPDX-License-Identifier: EPL-2.0
+*
+* Copyright Contributors to the Zowe Project.
+*
+*/
+
+const ejesVersion = 'EJES API, a CLI component of (E)JES.  V0.1.2'
+const https = require('https')
+const util = require('util')
+const fs = require('fs')
+const auth = require('./EjesLibrary/auth')
+const common = require('./EjesLibrary/common')
+function main(params) {
+  var debugObj = {}
+  var opts = { 
+    method: 'POST',
+  }
+  const  options = {
+      request: 0,
+      method: 'POST', 
+      path: '', 
+      query: '',
+      headers: { },
+      post: { 
+        initParms: { columns: 80, rows: 24, userAgent: '' }, 
+        execParms: { enumValue: 0, command: '' },
+        platformEncoding: '1047'
+      }
+    };
+  
+  function JSONparse(data, label) {
+    try {
+      return JSON.parse(data)
+    }
+    catch(e) {
+      let x = e.message.match(/^.+position (\d+)/)
+      let text = ''
+      if ( x && x.length == 2 ) {
+        text += data.substr(0, parseInt(x[1])) + '\n'
+        text += '\n*** JSON parse error at this position ***\n\n'
+        text += data.substr(parseInt(x[1])) + '\n'
+      }
+      else
+        text += data + '\n'
+        e.jsonParse = { reason: 'Bad JSON data received from host.  See badDataMarked property.  ' + ( data.trim().length == 0 ? 'No data to parse.' : 'Position is marked.') }
+        e.jsonParse.message = e.message
+        e.jsonParse.stack = e.stack.split('\n')
+        e.jsonParse.badDataMarked = text.split('\n')
+        msgToJsonAndExit(e, 60)
+    }
+  }
+  
+  function statusCheckExit(json) {
+    if ( json ) {
+      if ( json.status != 200 ) {
+        json.stackTrace && (json.stackTrace = json.stackTrace.split('\n\t'))
+        msgToJsonAndExit(json, json.status)
+      }
+    }
+  }
+
+  function msgToJsonAndExit(msg, exitCode) {
+    outputResults(msg, exitCode)
+    //process.exit()
+  }
+
+  function outputResults(json, exitCode = 0) {
+    typeof json == 'string'  && ( json = { statusMessage: json, exitCode: exitCode })
+    Object.entries(debugObj).length > 0 && ( debugObj.process = { argv: process.argv }) && (json.debug = debugObj)
+    process.exitCode = json.exitCode = exitCode
+    json.ejesVersion = ejesVersion
+    params && (params.response.data.setExitCode(exitCode))
+    if ( opts.rfj || opts.debug || exitCode > 0 || (params && params.arguments.rfj) || process.argv.some((item) => { return item == '--rfj' || item == '--response-format-json' })) {
+      if ( params ) {
+        params.response.data.setObj(json)
+        writeJsonResponse.call(params.response)
+      }
+      else
+        params ? params.response.console.log(JSON.stringify(json, undefined, 2)) : console.log(JSON.stringify(json, undefined, 2))
+    } 
+    else
+      json.cookie && (params ? params.response.console.log(json.cookie) : console.log(json.cookie))
+  }
+
+  function helpAndExit() {
+    let how = (ejes && ! ejes.zowe && ejes.hostname && ejes.port && ejes.basePath) ? ('on your server at https:/' + ejes.hostname + ':' + ejes.port + '/EjesWeb/swagger') : 'to the swagger documentation'
+    let h = 'USAGE ejes api command [options]\n\n' +  // The folowing text up to additional options is quoted from chapter 10.
+    'This command group is a thin layer over the (E)JES REST API.  Refer to chapter 10 and ' + how + ' for additional information.\n\nOptions are mapped from the object property models for execParms, initParms, mail, pdf, platformEncoding, and text.  Code all options in lowercase for Zowe compatibility.  The query parameters c, d, q, and m map to -c, -d, -q, and -m respectively.  Only the last element of an object property is mapped.  For example, pdf.security.allowCopying maps to --allowcopying.  Provide the proper object property type as the option argument.  Strings with spaces or shell-specific characters must be properly quoted.\n\nThe exception to direct mapping is mail.cc, which maps to --carboncopy.  The extended option --commanddatafile reads a JCL file for submission, while the mapped --commanddata option accepts a string with "\\n" line separators.  The extended option --bodyfile reads the body of an email from a file, while the mapped --body option accepts a string with "\\n" line separators.   If EJES_SUBMIT_PATH is set in the environment, it will be used for creating the path to the either file, otherwise the file is expected in the current working directory.\n\nThe first init command in a session will return a cookie, creating a stateful session.  Use the --cookie option in subsequent transactions to reference the same session.  If not referenced within two minutes, the session will automatically close.  The cookie specified on the --cookie option is returned in all stateful transactions for convenience.\n\nBy default, the CLI returns only the cookie, and only if the session is stateful.  An exit code of 0 means the transaction succeeded.  To visualize the data, use the --response-format-json (--rfj) option with no argument.  A non-zero exit code automatically returns JSON (as does the --debug option).  If you include the host command "return" in the --command string, the session terminates with a 500 return code.  This 500 exit code is considered normal, but you will not receive any query data.  To avoid this, plan to use a separate term request, or use a stateless exec request.\n\nDownloads are always saved to a file suggested by the underlying API.  JSON output for a download includes the status and the path to the file where the data was saved.  If EJES_DOWNLOAD_PATH is set in the environment, it will be used for creating the path to the file, otherwise the download is to the current working directory.\n\n' +
+    'In addition, the following profile options are available:\n\n' +
+    '  --host                 host name without a path\n' +
+    '  --basePath             the path component of the address\n' +
+    '  --port                 host port\n' +
+    '  --rejectUnauthorized   reject self-signed certificates\n' +
+    '  --user                 host user id (overrides profile)\n' +
+    '  --password             host password (overrides profile)\n' +
+    '  --authorization        base64 encoded user:password string,\n' +
+    '                         overrides profile and --user and --password,\n' +
+    '                         not necessary with profiles\n' +
+    'and\n\n' + 
+    '  --debug                additive flag for tech support use\n' +
+    '                           1 - Command discovered and compiled options object\n' +
+    '                           2 - Request object\n' +
+    '                           4 - Response headers\n\n' +
+    'Examples:\n\n' +
+    'zowe ejes api init --command "status o=rb*;1 j" --enumvalue 4 --useragent "Robert\'s api test" -q message,lines,function -c jobname,jobid,maxcomp\n\n' +
+    'zowe ejes api exec --command "submit api-array;st iefbr14;sort time d;upd" --enumvalue 5 --useragent "Submit and status stateless example" -q message,lines,submittedJobs -c jobname,jobid,maxcomp --debug 7 --commandData "//IEFBR14  JOB IEFBR14,\'IEFBR14\',CLASS=A,MSGCLASS=H\\n//EXEC     EXEC PGM=IEFBR14\\n//"\n\n' +
+    'zowe ejes api exec -d text --cc interpret --cookie "EJESWEB_54761=B6910DFF16053B1A56792A93C218C4BA;path=/EjesWeb;Secure;HttpOnly"\n\n' +
+    'zowe ejes api term --cookie "EJESWEB_54761=0F6E5AECACD44F7BC8ADC19A330C7D2D;path=/EjesWeb;Secure;HttpOnly"\n\n' +
+    'ejes api exec -d  pdf --cc interpret --command "st o=rb*;1 j"\n\n'
+    h = h.replace(/([^\n]{1,100})\s/g, '$1\n') // Pretty print up to 100 character margin.
+    params ? params.response.console.log(h) : console.log(h)
+    process.exit(0)
+  }
+
+  // Fix to allow proper operation of --response-format-json under Zowe.
+  const writeJsonResponse = params ? params.response.writeJsonResponse : () => {}
+  params && (params.response.writeJsonResponse = () => {})
+
+  // Handle profiling.  No support for anything but default profile at this point.
+  auth.setUpProfileDirectories()
+  auth.access(undefined, params)
+  
+  let start = process.argv[1].endsWith('api') ? 2 : process.argv[2] == 'api' ? 3 : 4  // node, ejes.cmd, zowe
+  if ( process.argv.length <= start + 1 )
+    helpAndExit()
+  var command = process.argv[start].toLowerCase(), item
+  if ( command == '-h' || command == '--help' || command == '-?' || command == '--ha' || command == '--helpapp' )
+    helpAndExit()
+  for (i = start + 1; i < process.argv.length; i++) {
+    switch(item = process.argv[i].toLowerCase()) {
+      case '-h': case '--help': case '-?': case '--helpapp': case '--ha': helpAndExit()
+      case '--rfj': case '--response-format-json': opts.rfj = true; break;
+      case '--dryrun': case '-n': opts.dryrun = true; break;
+      case '--debug':
+      case '--amount':
+      case '--blockid':
+      case '--body':
+      case '--bodyfile':
+      case '--cc':  // For options.post.pdf.cc and options.post.text.cc
+      case '--carboncopy': // Translates to options.post.mail.cc
+      case '--count':
+      case '--recordid':
+      case '--start':
+      case '--todend':
+      case '--todstart':
+      case '--decorate':
+      case '--font':
+      case '--orientation':
+      case '--overflow':
+      case '--pagesize':
+      case '--allowassembly':
+      case '--allowcopying':
+      case '--allowmodification':
+      case '--allowprinting':
+      case '--masterpassword':
+      case '--openpassword':
+      case '--bcc':
+      case '--from':
+      case '--html':
+      case '--subject':
+      case '--to':
+      case '--host':
+      case '--port':
+      case '--rejectunauthorized':
+      case '--ru':
+      case '--basepath':
+      case '--bp':
+      case '--user':
+      case '--password':
+      case '--pass':
+      case '--authorization':
+      case '-c':
+      case '-q':
+      case '--casKey':
+      case '--columns':
+      case '--extractdd':
+      case '--ipaddress':
+      case '--luName':
+      case '--patterndd':
+      case '--rows':
+      case '--subsystem':
+      case '--useragent':
+      case '--cookie':
+      case '-d':
+      case '-m':
+      case '--command':
+      case '--commanddata':
+      case '--commanddatafile':
+      case '--enumtime':
+      case '--enumvalue':
+      case '--showhiddencolumns':
+      case '--translatescreen':
+      case '--waitforresponse':
+      case '--platformencoding':
+        if ( i + 1 >= process.argv.length )
+          msgToJsonAndExit('Argument required for ' + process.argv[i], 20)
+        if ( /(-c|-d|-q|-m|--[a-z]+)/.test(process.argv[i + 1]) )
+          msgToJsonAndExit('All mapped options have arguments.  ' + process.argv[i] + ' does not', 21)
+        opts[item.substring(process.argv[i].startsWith('--') ? 2 : 1)] = process.argv[++i]
+        break;
+      default:
+        msgToJsonAndExit(process.argv[i] + ' is not a valid option', 31)
+      }
+    }
+
+    opts.debug & 1 && (debugObj.command = command)
+    opts.debug & 1024 && params && (debugObj.zowe = params.arguments)
+    opts.debug & 8 && (debugObj.compiledProfile = ejes)
+    opts.debug & 1 && (debugObj.prefixupOptions = Object.assign({}, opts))
+
+    // Option argument fix-ups because of Zowe, overrides, or stringizing of booleans.
+    opts.ru != undefined && (opts.rejectunauthorized = opts.ru)
+    opts.rejectunauthorized == undefined && (opts.rejectunauthorized = ejes.rejectUnauthorized)
+    typeof opts.rejectunauthorized == 'string' && (opts.rejectunauthorized = opts.rejectunauthorized == 'true')
+    opts.rejectunauthorized == undefined && (opts.rejectunauthorized = true)
+    opts.bp && (opts.basepath = opts.bp)
+    opts.pass && (opts.password = opts.pass)
+    opts.debug && (opts.debug = parseInt(opts.debug))
+    ! opts.host && (opts.host = ejes.hostname)
+    ! opts.port && (opts.port = ejes.port)
+    ! opts.basepath && (opts.basepath = ejes.basePath)
+    ! opts.authorization && ! opts.user && (opts.authorization = ejes.auth)
+    typeof opts.allowassembly == 'string' && (opts.allowassembly = opts.allowassembly == 'true')
+    typeof opts.allowcopying == 'string' && (opts.allowcopying = opts.allowcopying == 'true')
+    typeof opts.allowmodification == 'string' && (opts.allowmodification = opts.allowmodification == 'true')
+    typeof opts.allowprinting == 'string' && (opts.allowprinting = opts.allowprinting == 'true')
+    typeof opts.showhiddencolumns == 'string' && (opts.showhiddencolumns = opts.showhiddencolumns == 'true')
+    typeof opts.translatescreen == 'string' && (opts.translatescreen = opts.translatescreen == 'true')
+    typeof opts.waitforresponse == 'string' && (opts.waitforresponse = opts.waitforresponse == 'true')
+    typeof opts.decorate == 'string' && (opts.decorate = opts.decorate == 'true')
+    typeof opts.html == 'string' && (opts.html = opts.html == 'true')
+
+    try {   
+      let submitPath = process.env.EJES_SUBMIT_PATH && (downloadPath = process.env.EJES_SUBMIT_PATH.length == 0 ? '' : process.env.EJES_SUBMIT_PATH)
+      opts.bodyfile && (opts.body = fs.readFileSync(submitPath + opts.bodyfile).toString())
+      opts.commanddatafile && (opts.commanddata = fs.readFileSync(submitPath + opts.commanddatafile).toString().replace(/\n/g, '\u0001').replace(/\r/g, '').replace(/\u0001/g, '\\n'))
+    } catch(e) { msgToJsonAndExit(e, 44) }          
+
+    opts.debug & 1 && (debugObj.compiledOptions = opts)
+
+    function downloadSetup() {
+      if ( opts.d && opts.m )
+        msgToJsonAndExit('-d cannot be used with -m', 55)
+      if ( opts.d || opts.m ) {
+        options.post = options.post || {}
+        let type = opts.d || opts.m
+        let pdf = type == 'pdf'
+        let text = type == 'text'
+        if ( ! pdf && ! text )
+          msgToJsonAndExit('"pdf" and "text" are the only legal values for -d and -m', 62)
+        pdf ? options.post.pdf = {} : options.post.text = {}
+        opts.amount && (pdf ? options.post.pdf.amount = opts.amount : options.post.text.amount = opts.amount) 
+        opts.blockid && (pdf ? options.post.pdf.blockId = opts.blockid : options.post.text.blockId = opts.blockid)
+        opts.cc && (pdf ? options.post.pdf.cc = opts.cc : options.post.text.cc = opts.cc)
+        opts.count && (pdf ? options.post.pdf.count = opts.count : options.post.text.count = opts.count)
+        opts.recordid && (pdf ? options.post.pdf.recordId = opts.recordid : options.post.text.recordId = opts.recordid)
+        opts.start && (pdf ? options.post.pdf.start = opts.start : options.post.text.start = opts.start)
+        opts.todend && (pdf ? options.post.pdf.todEnd = opts.todend : options.post.text.todEnd = opts.todend) 
+        opts.todstart && (pdf ? options.post.pdf.todStart = opts.todstart : options.post.text.todStart = opts.todstart)
+        if ( pdf ) {
+          opts.decorate && (pdf.decorate = opts.decorate)
+          opts.font && (pdf.font = opts.font)
+          opts.orientation && (pdf.orientation = opts.orientation)
+          opts.overflow && (pdf.overflow = opts.overflow)
+          opts.pagesize && (pdf.pageSize = opts.pagesize)
+          options.post.pdf.security = {}
+          opts.allowassembly && (options.post.pdf.security.allowAssembly = opts.allowassembly)
+          opts.allowcopying && (options.post.pdf.security.allowCopying = opts.allowcopying)
+          opts.allowmodification && (options.post.pdf.security.allowModification = opts.allowmodification)
+          opts.allowprinting && (options.post.pdf.security.allowPrinting = opts.allowprinting)
+          opts.masterpassword && (options.post.pdf.security.masterPassword = opts.masterpassword)
+          opts.openpassword && (options.post.pdf.security.openPassword = opts.openpassword)
+          if ( Object.entries(options.post.pdf.security).length < 1 )
+            delete options.post.pdf.security
+          if ( Object.entries(options.post.pdf).length < 1 )
+            delete options.post.pdf
+        }
+        else if ( text ) {
+          if ( Object.entries(options.post.text).length < 1 )
+            delete options.post.text
+        }
+        if ( opts.m ) {
+          options.post = options.post || {}
+          options.post.mail = {} 
+          opts.bcc && (options.post.mail.bcc = opts.bcc)
+          opts.body && (options.post.mail.body = opts.body.replace('\\n', '\n'))
+          opts.carboncopy && (options.post.mail.cc = opts.carboncopy)
+          opts.from && (options.post.mail.from = opts.from)
+          opts.html && (options.post.mail.html = opts.html)
+          opts.subject && (options.post.mail.subject = opts.subject)
+          opts.to && (options.post.mail.to = opts.to)
+        }
+      }
+    }
+
+    var sessionType = 'stateful'
+    function setupInitExec() {
+      options.hostname = opts.host
+      options.port = parseInt(opts.port)
+      options.rejectUnauthorized = opts.rejectunauthorized;
+
+      if ( command == 'exec ' && opts.cookie ) {
+        delete options.post.initParms
+        delete options.headers.Authorization
+      }
+      else { 
+        command == 'exec' && ! opts.cookie && (sessionType = 'stateless');
+        ! opts.cookie && opts.user && opts.password && (options.headers.Authorization = ('Basic ' +
+          (Buffer.alloc((opts.user + ':' + opts.password).length, (opts.user + ':' + opts.password))).toString('base64')))
+        ! opts.cookie && opts.authorization && (options.headers.Authorization = 'Basic ' + opts.authorization)
+        opts.columns && (options.post.initParms.columns = opts.columns)
+        opts.rows && (options.post.initParms.rows = opts.rows)
+        opts.caskey && (options.post.initParms.columns = opts.columns)
+        opts.extractdd && (options.post.initParms.extractDD = opts.extractdd)
+        opts.ipaddress && (options.post.initParms.ipAddress = opts.ipaddress)
+        opts.luname && (options.post.initParms.luName = opts.luname)
+        opts.patterndd && (options.post.initParms.patternDD = opts.patterndd)
+        opts.subsystem && (options.post.initParms.subsystem = opts.subsystem)
+        opts.useragent && (options.post.initParms.userAgent = opts.useragent)
+        opts.command && (options.post.execParms.command = opts.command)
+      }
+      opts.cookie && (options.headers.Cookie = opts.cookie)
+      opts.command && (options.post.execParms.command = opts.command)
+      opts.commanddata && (options.post.execParms.commandData = opts.commanddata.split('\\n')) // TODO Read from file
+      opts.enumtime && (options.post.execParms.enumTime = parseInt(opts.enumtime))
+      opts.enumvalue && (options.post.execParms.enumValue = parseInt(opts.enumvalue))
+      opts.showhiddencolumns && (options.post.execParms.showHiddenColumns = opts.showhiddencolumns)
+      opts.translatescreen && (options.post.execParms.translateScreen = opts.translateacreen)
+      opts.useinternalconsole && (options.post.execParms.userAgent = opts.useragent)
+      opts.waitforresponse && (options.post.execParms.waitForResponse = opts.waitforresponse)
+      opts.platformencoding && (options.post.platformEncoding = opts.platformencoding)
+      downloadSetup()
+    }
+
+    let amper
+    switch(command) {
+      default:
+        msgToJsonAndExit(command + ' is not a valid command', 63)
+      case 'init':
+        if ( opts.d || opts.m )
+          msgToJsonAndExit('-d and -m are not supported on the INIT request', 64)
+        setupInitExec()
+        options.query = ''
+        opts.q && (options.query += '?q=' + opts.q) && (amper = '&')
+        opts.c && (options.query += (amper || '?') + 'c=' + opts.c)
+        opts.m && (options.query = '?m=' + opts.m) // Paul says support will be added on initParms.
+        opts.d && (options.query = '?d=' + opts.d) // Ditto.
+        options.path = opts.basepath + '/init' + options.query
+        break
+      case 'exec':
+        setupInitExec()
+        options.query = ''
+        opts.q && (options.query += '?q=' + opts.q) && (amper = '&')
+        opts.c && (options.query += (amper || '?') + 'c=' + opts.c)  && (amper = '&')
+        opts.m && (options.query = '?m=' + opts.m)
+        opts.d && (options.query = '?d=' + opts.d)  
+        options.path = opts.basepath + '/exec' + options.query
+        break
+      case 'term':
+        sessionType = 'stateless' // Because terminated.
+      case 'cancel-download':
+        delete options.post.initParms
+        delete options.post.execParms
+        delete options.post.platformEncoding
+        delete options.query
+        delete options.headers.authorization
+        options.hostname = opts.host
+        options.port = parseInt(opts.port)
+        options.rejectUnauthorized = opts.rejectunauthorized
+        options.path = opts.basepath + '/' + command
+        opts.cookie && (options.headers.Cookie = opts.cookie)
+        break
+    }
+
+    opts.debug & 2 && (debugObj.requestObject = options)
+    if ( opts.dryrun ) {
+      let json = { cookie: cookie, status: 0, statusMessage: 'dryrun', sessionType: sessionType }
+      outputResults(json, 49)
+      return
+    }
+    https.request(options, (res) => {
+      var txt = false, pdf = false, file, existingFileReplaced = false, downloadPath = '', data = '', size = 0; startTime = Date.now()
+      opts.debug & 4 && (debugObj.responseHeaders = res.headers)
+      if ( res.headers['set-cookie'] )
+        cookie = res.headers['set-cookie'][0]
+      else
+        opts.cookie && (cookie = opts.cookie)
+      options.execParms && options.execParms.commmandData && delete options.execParms.commmandData
+
+      if ( res.headers && res.headers["content-disposition"] ) {
+        var x = res.headers["content-disposition"].match(/^.*filename="(.+\.(pdf|txt))"$/, i)
+        txt = x && x[2] && x[2] == 'txt'
+        pdf = x && x[2] && x[2] == 'pdf'
+        x && x[1] && (file = x[1])
+        if ( process.env.EJES_DOWNLOAD_PATH )
+          downloadPath = process.env.EJES_DOWNLOAD_PATH.length == 0 ? '' : process.env.EJES_DOWNLOAD_PATH
+        if ( ! /^(?:[\w]:|\\|\/).*$/.test(file) )
+          file = downloadPath + file
+      }
+      if ( file ) {
+        try {
+          if ( fs.existsSync(file) ) {
+            fs.unlinkSync(file)
+            existingFileReplaced = true
+          }
+        }
+        catch(e) { msgToJsonAndExit(e, 65) }
+      }
+      if ( file ) { // Download
+        res.on('data', (chunk) => { // Download DATA response.
+          size += chunk.length
+          try      { fs.appendFileSync(file, chunk) }
+          catch(e) { msgToJsonAndExit(e, 66) }        
+        })
+      } 
+      else { // NOT a download
+        res.on('data', (chunk) => { data += chunk })
+      }
+      res.on('end', () => {  // End of HTTP response shared by both download and not a download.
+        if ( file ) { // WAS a download
+          let json = { cookie: cookie, status: res.statusCode, statusMessage: 'Download complete', file: file, pdf: pdf, text: txt, existingFileReplaced: existingFileReplaced, sessionType: sessionType, downloadSize: common.fileSizeSI(size), downloadTime: common.abbreviateNumber((Date.now() - startTime) / 1000) + ' seconds' }
+          sessionType == 'stateless' && delete json.cookie
+          outputResults(json)
+        } 
+        else {  // Was NOT a download.
+          statusCheckExit(JSONparse(data, 'makeRequest-not-download'))
+          let json = JSONparse(data, 'download done')
+          sessionType != 'stateless' && (json.cookie = cookie)
+          json.sessionType = sessionType
+          json.downloadSize = common.fileSizeSI(data.length)
+          json.downloadTime = common.abbreviateNumber((Date.now() - startTime) / 1000) + ' seconds'
+          outputResults(json)
+        }
+      })
+    })
+    .on('error', (e) => { msgToJsonAndExit(e, 70) })
+    .end(JSON.stringify(options.post))
+}
+/* Direct run code follows */
+if ( process.argv[1].slice(-7).toLowerCase() != 'main.js' && process.argv[1].slice(-4).toLowerCase() != 'zowe' )
+  main()
+module.exports = { main }

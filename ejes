@@ -1,0 +1,3208 @@
+#!/usr/bin/env node
+//  EJES QUERY CLI - Host query CLI that doesn't require knowledge of (E)JES host commands.
+
+/*
+* This program and the accompanying materials are made available under the terms of the
+* Eclipse Public License v2.0 which accompanies this distribution, and is available at
+* https://www.eclipse.org/legal/epl-v20.html
+*
+* SPDX-License-Identifier: EPL-2.0
+*
+* Copyright Contributors to the Zowe Project.
+*
+*/
+
+const {writeJsonResponse, setZoweParams, isPureNode, setExitCode, setErrStrip, setOutStrip, getOutStrip, ansiErrOut, ansiLogOut, setObj, isResponseFormatJson, stripCodes} = require('./EjesLibrary/ansiOut')
+require('./EjesLibrary/debugCodes')
+function main(params) {
+
+  const ejesVersion = 'EJES Query, a CLI component of (E)JES.  V0.4.9'
+  const auth = require('./EjesLibrary/auth')
+  const { debugRequest, debugResponse, getClientDateStamp, term, JSONparse } = require('./EjesLibrary/Common.js')
+  const https = require('https')
+  const readline = require('readline');
+  const fs = require('fs')
+  const util = require('util')
+  const os = require('os')
+  const NO_MAX = 99
+  const yesNoAllCancel = INFO + ' - (' + ITEM + 'y' + INFO + 'es/' + ITEM + 'n' + INFO + 'o/' + ITEM + 'c' + INFO + 'ancel/' + ITEM + 'a' + INFO + 'll)?' + RESET
+
+  var acc = []
+  var allResponse = false;
+  var arrangement = []
+  var authList = []
+  var capturedCmdlist = ''
+  var captureKeystrokes = true;
+  var crDelay = true;
+  var confirmations = false
+  var defaultUse = ''
+  var enumvalue = 200
+  var func
+  var ftype
+  var isDownload = false;
+  var keyPrompts = []
+  var last
+  var lastIndex
+  var lineOutCount = 0;
+  var maxLines = process.stdout.isTTY ? process.stdout.rows - 6 : 1000
+  var needUlog = false;
+  var noneResponse = false;
+  var OMITTED = 'omitted'
+  var optionArray =[]
+  var optionCount = 0
+  var parcelOut = false;
+  var parameterList = ''
+  var promptCount = 0;
+  var queuedConfirmations = fs.existsSync(os.homedir() + '/.ejes/work/confirm')
+  var quit = false;
+  var response = ''
+  var rowsAvailableHint
+  var rowKeys = []
+  var truncatedLine = false
+  var truncatedLineFlagged = false
+  var widthTable = process.stdout.isTTY ? process.stdout.columns - 1 : 9999
+  var widthReport = widthTable
+
+  const cmdlist = {  // NOTE: Commands are processed in order (generally), so if cmds depend on commands, put them in processing order.
+          //012345679012345679012345679012345679012345679012345679012345679012345679   /* RULER for help defining new entries */
+    debug: {                 // A property in the cmdlist object can be an option, or a meta object to be accessed from the cmdlist.
+                             // See "refine" property for a help-only topic and "showHelp" for a function property.
+                             // This "debug" property serves as documentation for the table, as does "refine" and "showHelp".
+                             // Note: consumers of these properites can attach their own values, functions, etc.
+      long: '--debug',       // Main name of the switch
+      short: '--dbg',        // A shorter alternative, usually one character and one dash, but not always 
+      zowe: '--debug-value', // Full zowe name, which often has hypens
+      camel: '--dv',         // Usually the auto-compressed option name by zowe, or camel-cased.
+      tokens:  [],           // A list of valid values if given, otherwise not used.  IF given, input must match or an error will occur.  See "invalidArgument' function.
+      defaultValue: '7',     // The default value to assign if the user doesn't provide an argument.  If defaultValue is an empty string and the argument is omitted, the argument is considered required.
+      maxOptionRepeat: 1,    // The maximum number of times the option can be codded.  NO_MAX for repeatbles.  1 for one-time only.
+      minArgumentCount: 0,   // The minmum number of arguments allowed.  0 for none is okay.  Can be greater than 1.
+      maxArgumentCount: 1,   // Maximum arguments allowed.  A weak check, but sometimes useful.
+      list: false,           // Not sure if this is used.
+      usage: '[[-dbg | --debug] ' + Underscore + 'number' + NoUnderscore + ']',   // The option's usage chart.
+      help: 'Specify debugging behavior.  The values are additive.  7 is useful for\n' + // Help when system references the property name.
+            'figuring out why a table or report isn\'t selected.  For a list\n' +
+            'behaviors, specify --debug list.\n',
+      doList: () => {        // Provide a function that display when user uses the 'list' argument.
+        ansiLogOut('Value    User   Description')
+        ansiLogOut('-----    ----   -----------')
+        ansiLogOut('1        yes    Command line options and arguments')
+        ansiLogOut('2        yes    Generated host commands amd queries')
+        ansiLogOut('4        yes    Host commands (must also specify --dry-run)')
+        ansiLogOut('32       no     Display command row keys in tabular output')
+        ansiLogOut('64       no     Request and query')
+        ansiLogOut('128      no     Response headers')
+        ansiLogOut('512      no     JSON response inspector (huge output)')
+        ansiLogOut('1024     no     Zowe parameters if running under Zowe')
+        ansiLogOut('\nThese option arguments are additive.  Combining 1, 2, 4 would result in --debug 7.')  
+      },
+      value: [],             // This is the resulting value read from the command line and often parsed and reformated by the after function.
+      after: (cmd) => {      // Function that runs after the argument data is placed in value.
+        debug = cmd.value = cmd.value > 0 ? Math.max(1,parseInt(cmd.value[0])) : 0
+      },
+      anyway: () => {},      // Function that is called even if the user doesn't code the option on the command line.
+      reparsed: undefined    // Set to true when the option has be reparsed.  Could be used to see if another option was parsed first, or allow one option to parse another safely.
+    },
+    noColor: {
+      long: '--no-color', short: '--nc', camel: '--noColor',
+      tokens: ['auto', 'on', 'off'], defaultValue: 'on', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false,
+      doList: (item) => {
+        ansiLogOut('Value      Default  Description   (' + item + ')')
+        ansiLogOut('-----      -------  -----------')
+        ansiLogOut('auto       yes      Strip ANSI color characters from redirected output streams')
+        ansiLogOut('off        no       Always allow ANSI color characters in stdout and stderr')
+        ansiLogOut('on         no       Always strip ANSI color characters from stdout and stderr')
+        ansiLogOut('<omitted>           Same as on.')
+        ansiLogOut('\nNote: Under OMVS, or with FORCE_COLOR=0 or NO_COLOR defined in the environment, ' + DEFAULT + '--no-color' + RESET + ' is always in effect.')
+      },
+      usage: '[[' + DEFAULT + '--no-color' + RESET + ' [' + DEFAULT + 'auto' + RESET + ' | yes | no]]',
+      help: 'Enable or disable ANSI color characters in stdout and stderr streams.\n' +
+            'By default, ANSI characters will not appear in redirected output (' + DEFAULT + 'auto' + RESET + ').\n' +
+            'They will also not appear in any output under OMVS, or if NO_COLOR or FORCE_COLOR=0 is defined\n' +
+            'in the environment table.\n',
+      value: [],
+      after: (cmd) => {
+        cmdlist.invalidArgument(cmd)
+        if ( forceNoColor ) // already set at beginning of main function processing
+          return
+        switch(cmd.value[0]) {
+          case 'auto': // See anyway function.
+            setErrStrip(! process.stderr.isTTY)
+            setOutStrip(noColor = ! process.stdout.isTTY)  
+            break
+          default:
+          case 'off':
+            noColor = false
+            break
+          case 'on': 
+            noColor = true
+          }
+        },
+        anyway: (cmd) => {
+          if ( isPureNode() || ! params.arguments.noColor ) {
+            setErrStrip(! process.stderr.isTTY)
+            setOutStrip(noColor = ! process.stdout.isTTY)  
+          }
+        },
+    },
+    scheme: {
+      long: '--color-scheme', short: '--cs', zowe: '--scheme', camel: '--colorScheme',
+      tokens: [], defaultValue: 'dark', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false,
+      doList: (item) => {
+        ansiLogOut('Value        Default  Description   (' + item + ')')
+        ansiLogOut('----------   -------  -----------')
+        ansiLogOut('dark         yes      Apply dark color scheme in dark.scheme.')
+        ansiLogOut('light        no       Apply light color scheme in light.scheme.')
+        ansiLogOut('powershell   no       Apply blue color scheme in powershell.scheme.  Best only for Powershell.')
+        ansiLogOut('mono         no       Apply grayscale scheme in mono.scheme.')
+        ansiLogOut('none         no       Apply no color scheme in none.scheme.')
+        ansiLogOut('<user>       no       Apply a custom user color scheme using the name supplied.')
+        ansiLogOut('\nNote: Under OMVS, or with ' + ITEM + '--no-color' + RESET + ', color schemes are ignored.')
+      },
+      usage: '[' + DEFAULT + '[--cs | --colorScheme]' + RESET + ' [' + DEFAULT + 'dark' + RESET + ' | light | powershell | mono | none | '+ Underscore + 'user-scheme' + NoUnderscore + ']]',
+      help: 'Enable a color scheme to colorize stderr output streams.\n' +
+            'By default, a dark theme is used.  You can create your own scheme files.  See dark.scheme for\n' +
+            'more information.  Under OMVS, or with ' + ITEM + '--no-color' + RESET + ', color schemes are ignored.',
+      value: [],
+      after: (cmd) => {
+          if ( ! fs.existsSync(__dirname + '/EjesLibrary/' + cmd.value[0] + '.scheme')) {
+            ansiErrOut(ERROR + 'Scheme file ' + ITEM + (__dirname + '/EjesLibrary/' + cmd.value[0] + '.scheme') + ' does not exist.' + RESET)
+            term.exitNow(48, true)
+            }
+        },
+      anyway: (cmd) => {
+        },
+    },
+    help: {
+      short: '-h', long: '--help', zowe: '--helpApp', camel: '--ha',
+      tokens: [], defaultValue: 'usage', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: () => {
+        ansiLogOut('Value    Default  Description   (help)')
+        ansiLogOut('-----    -------  -----------')
+        ansiLogOut('usage    yes      Syntax diagram')
+        ansiLogOut(Underscore + 'option' + NoUnderscore + '   no       The long or short option without dashes')
+        ansiLogOut('refine   no       Information about refining selections')
+        ansiLogOut('all      no       All topics in alphabetic order — use | more for easy viewing')
+        cmdlist.showHelp(cmdlist.list)
+      },
+      usage: '[-h | --help | --ha | --helpApp][' + DEFAULT + 'usage' + RESET + ' | ' + DEFAULT + 'all' + RESET + ' | ' + DEFAULT + 'refine' + RESET + ' | ' + Underscore + 'topic' + NoUnderscore +']',
+      help: 'Request help on commands.  Specify no argument for usage.\n' +
+            'You can ask for help for any long option name in the usage.\n\n' +
+            'EXAMPLE: ' + FLAG + '--help metafilter' + RESET, 
+      value: [],
+      after: (cmd) => {
+        if ( cmd.value == 'usage' ) {
+            cmdlist.showUsage()
+          }
+        if ( cmd.value == 'all') {
+          let topics = []
+          const keys = Object.entries(cmdlist)
+          for (const key of keys ) {
+            if ( typeof cmdlist[key[0]] != 'function' && cmdlist[key[0]].help )
+              topics.push(key[0])
+          }
+          topics.sort().forEach((topic) => { cmdlist.showHelp(cmdlist[topic], true) })
+        }
+        else if (cmdlist[cmd.value]) 
+          cmdlist.showHelp(cmdlist[cmd.value])
+        else if ( ! Object.keys(cmdlist).some((item)=> {
+              if ((cmdlist[item].short && (cmdlist[item].short == ('-' + cmd.value) || cmdlist[item].short == ('--' + cmd.value))) ||
+                  (cmdlist[item].zowe  && (cmdlist[item].zowe == '--' + cmd.value)) ||
+                  (cmdlist[item].long  && (cmdlist[item].long == '--' + cmd.value)) ||
+                  (cmdlist[item].camel && cmdlist[item].camel == '--' + cmd.value)) { 
+                cmdlist.showHelp(cmdlist[item])
+                return true
+              }
+            })
+          )
+          ansiErrOut(ERROR + 'No help for ' + ITEM + cmd.value[0] + ERROR + '.' + RESET)
+          term.exitNow(45, true)
+      }
+    },
+    use: {  
+      short: '-u', long: '--use',
+      tokens: [], defaultValue: 'status', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, 
+      usage: '[[-u | ' + DEFAULT + '--use' + RESET + '] [' + DEFAULT + 'status' + RESET + ' | ' + Underscore + 'table' + NoUnderscore + '] ]',
+      help: 'Specify the primary table to use or output if the default table is not\n' +
+            'desired.  For a list of arguments, use ' + FLAG + '--use list' + RESET + '.\n\n' +
+            'EXAMPLE:  ' + FLAG + '--use activity' + RESET,
+      value: []
+    },
+    table: {
+      short: '-t', long: '--table',
+      tokens:  [], defaultValue: 's', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, 
+      usage: '[[-t | --table] [' + DEFAULT + Underscore + 'table-default' + NoUnderscore + RESET + ' | ' + Underscore + 'table' + NoUnderscore + ']]... ',
+      help: 'Specify a child table to use or to output.  Specify an argument value if the\n' +
+            'default table is not desired.  If multiple rows are selected (shown in the table),\n' + 
+            'only the first row will be output.  Use ' + FLAG + '--help refine' + RESET + ' for how to select rows.\n\n' +
+            'For a context list of tables, use ' + FLAG + '--table list' + RESET + '.\n' +
+            'Repeatable option.  Specify ' + FLAG + '--help repeat' + RESET + ' for additional information.\n\n' +
+            'EXAMPLE:  ' + FLAG + '--table q' + RESET + '    (Output descriptors from DSSTAT)',
+    levels: 1, value: []
+    },
+    report: {
+      short: '-r', long: '--report',
+      tokens:  [], defaultValue: 'b', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false,
+      usage: '[[-r | --report] [' + DEFAULT + Underscore + 'browse-default' + NoUnderscore + RESET + ' | ' + Underscore + 'report' + NoUnderscore + ']]',
+      help: 'Specify a report to output.  Provide an argument value if the default\n' +
+            'report is not desired.  If multiple rows are selected (shown in the table\n' + 
+            'shown without using ' + FLAG + '--report' + RESET + '), only the first row will be output.\n' + 
+            'Use ' + FLAG + '--help refine' + RESET + ' for how to select rows.\n\n' +
+            'For a context list of reports, use ' + FLAG + '--report list' + RESET + '.\n\n' +
+            'EXAMPLE:  ' + FLAG + '--report du' + RESET + '    (Dataset Control Blocks from STATUS)',
+      value: []
+    },
+    job: {  
+      long: '--job',
+      tokens: ['yes', 'no', 'off'], defaultValue: 'yes', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false,
+      doList: (item) => {      
+        ansiLogOut('Value    Default  Description   (' + item + ')')
+        ansiLogOut('-----    -------  -----------')
+        ansiLogOut('yes      yes      This type of job will be shown')
+        ansiLogOut('no       no       This type of job will be omitted')
+        ansiLogOut('off      no       Placeholder; parent setting or default is used')
+      },
+      usage: '[' + DEFAULT + '--job' + RESET + ' [' + DEFAULT + 'yes' + RESET + ' | no | off]]',
+      help: 'Disable selecting batch jobs for applicable displays by specifying "no".\n' +
+            'Selecting jobs is enabled by default.\n\n' +
+            'EXAMPLE: ' + FLAG + '--job no' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    stc: {  
+      long: '--stc',
+      tokens: ['yes', 'no', 'off'], defaultValue: 'yes', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (cmd) => { cmdlist.job.doList(cmd) },
+      usage: '[' + DEFAULT + '--stc' + RESET + ' [' + DEFAULT + 'yes' + RESET + ' | no | off]]',
+      help: 'Disable selecting started tasks for applicable displays by specifying\n' +
+            '"no".  Selecting started tasks is enabled by default..\n\n' +
+            'EXAMPLE: ' + FLAG + '--stc no' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    atx: {  
+      long: '--atx',
+      tokens: ['yes', 'no', 'off'], defaultValue: 'yes', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (cmd) => { cmdlist.job.doList(cmd) },
+      usage: '[' + DEFAULT + '--atx' + RESET + ' [' + DEFAULT + 'yes' + RESET + ' | no | off]]',
+      help: 'Disable selecting APPC/MVS transaction jobs by specifying "no".\n' +
+            'Selecting APPC/MVS transaction jobs is enabled by default.\n\n' +
+            'EXAMPLE: ' + FLAG + '--atx no' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    tsu: {  
+      long: '--tsu',
+      list: false, doList: (cmd) => { cmdlist.job.doList(cmd) },
+      tokens: ['yes', 'no', 'off'], defaultValue: 'yes', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 1,
+      usage: '[' + DEFAULT + '--tsu' + RESET + ' [' + DEFAULT + 'yes' + RESET + ' | no | off]]',
+      help: 'Disable selecting TSO user output for applicable displays by specifying\n' + 
+            '"no".  Selecting TSO user output is enabled by default.\n\n' +
+            'EXAMPLE: ' + FLAG + '--tsu no' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    jobname: {
+      short: '-j', long: '--jobname',
+      tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 8,
+      list: false, doList: (item) => {
+        ansiLogOut('Value  Required  Description   (' + item + ')')
+        ansiLogOut('-----  --------  -----------')
+        ansiLogOut(Underscore + 'mask' + NoUnderscore + '   yes       1 t0 8 masks separated by spaces that can contain wildcards * or %')
+        ansiLogOut('off    no        Placeholder; parent setting or default is used')
+      },
+      usage: '[[-j | --jobname] [off | ' + Underscore + 'jobname' + NoUnderscore + '...]',
+      help: 'Establish job name filter masks.  Filters these tables: activity, input, hold,\n' +
+            'writer (output), nje, status, and mds.\n\n' +
+            'EXAMPLE: ' + FLAG + '--jobname myjob cics*' + RESET,
+      value: []
+    },
+    sysclass: {
+      long: '--sysclass',
+      tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 1,
+      usage: '[--sysclass [' + DEFAULT + 'off' + RESET + ' | ' + Underscore + 'sysclass' + NoUnderscore + '...]]',
+      list: false, doList: (item) => {
+        ansiLogOut('Value         Required  Description   (' + item + ')')
+        ansiLogOut('------------  --------  -----------')
+        ansiLogOut(Underscore + 'sysout-class' + NoUnderscore + '  yes       1 t0 8 one-character class names, not separated by spaces')
+        ansiLogOut('off           no        Placeholder; parent setting or default is used')
+      },
+      help: 'Establish sysout class filtering.  Filters these tables: hold, hold datasets,\n' +
+            'writer (output), writer datasets, job status, job status datasets,\n' +
+            'and job zero.  Up to 8 one-character classes may be specified\n' +
+            'without spaces.\n' +
+            'Repeatable option.  Specify ' + FLAG + '--help repeat' + RESET + ' for additional information.\n\n' +
+            'EXAMPLE: ' + FLAG + '--sysclass abc' + RESET,
+      value: []
+    },
+    dest: {
+      long: '--dest',
+      tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 4,
+      list: false, doList: (item) => {
+        ansiLogOut('Value  Required  Description   (' + item + ')')
+        ansiLogOut('-----  --------  -----------')
+        ansiLogOut(Underscore + 'mask' + NoUnderscore + '   yes       1 t0 4 masks separated by spaces that can contain wildcards * or %')
+        ansiLogOut('off    no        Placeholder; parent setting or default is used')
+      },
+      usage: '[--dest [' + DEFAULT + 'off' + RESET + ' | ' + Underscore + 'destination' + NoUnderscore + '...]]',
+      help: 'Establish destination filtering.  Filters these tables: hold, hold datasets,\n' +
+            'writer (output), writer datasets, job status, job status datasets,\n' +
+            'and job zero.  Up to 4 destination masks may be specified.\n' +
+            'Repeatable option.  Specify ' + FLAG + '--help repeat' + RESET + ' for additional information.\n\n' +
+            'EXAMPLE: --dest la n*' + RESET,
+      value: []
+    },
+    usr: {
+      long: '--usr', camel: '--userid',
+      tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 8,
+      list: false, doList: (cmd) => { cmdlist.jobname.doList(cmd) },
+      usage: '[[--usr | --userid] [' + DEFAULT + 'off' + RESET + ' | ' + Underscore + 'username' + NoUnderscore + '...]]',
+      help: 'Establish submitter user ID filtering.  Filters these tables: activity, input, hold,\n' +
+            'writer (output), job status, mds, and nje.  Up to 4 user ID masks may\n' +
+            'be specified.\n\n' +
+            'EXAMPLE: ' + FLAG + '--usr myuid other*' + RESET,
+      value: []
+    },
+    origin: {
+      long: '--origin',
+      tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 4,
+      list: false, doList: (cmd) => { cmdlist.dest.doList(cmd) },
+      usage: '[--origin [' + DEFAULT + 'off' + RESET + ' | ' + Underscore + 'origin' + NoUnderscore + '...]]',
+      help: 'Establish job origin filtering on.  Filters these tables: activity, input, hold,\n' +
+            'writer (output), job status, mds, and nje.  Up to 4 origin masks may\n' +
+            'be specified.\n\n' +
+            'EXAMPLE: ' + FLAG + '--origin la n*' + RESET,
+      value: []
+    },
+    jobclass: {
+      long: '--jobclass',
+      list: false, doList: (cmd) => { cmdlist.dest.doList(cmd) },
+      tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 4,
+      usage: '[--jobclass [' + DEFAULT + 'off' + RESET + ' | ' + Underscore + 'jobclass' + NoUnderscore + '...]]',
+      help: 'Establish job class filtering.  Filters these tables: activity, input, hold,\n' +
+            'writer (output), job status, mds, and nje.  Up to 4 job classes masks\n' +
+            'may be specified.\n\n' +
+            'EXAMPLE: ' + FLAG + '--jobclass cl1 p*' + RESET,
+      value: []
+    },
+    owner: {
+      short: '-o', long: '--owner',
+      tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 8,
+      list: false, doList: (cmd) => { cmdlist.jobname.doList(cmd) },
+      usage: '[[-o | ' + DEFAULT + '--owner' + RESET + '] [' + DEFAULT + Underscore + 'your-userid' + NoUnderscore + RESET + ' | off | ' + Underscore + 'ownername' + NoUnderscore + '...]]',
+      help: 'Establish owning user ID filtering.  Filters these tables: activity, input,\n' +
+            'hold, writer (output), job status, mds, and nje.  Up to 8 owner ID\n' +
+            'masks may be specified.  If not specified, your user ID will be used.\n' + 
+            'If you user ID automatically used, it will be specified before the\n' + 
+            'display is invoked, otherwise after to allow use of primary, system,\n' +
+            'and display-specifc criteria to operate as expected.\n\n' +
+            'EXAMPLE: ' + FLAG + '--owner anuid other*' + RESET,
+      value: [], setUser: () => {
+        if ( cmdlist.owner.value.length == 0) { // If 'off' or something else is specified...
+          cmdlist.owner.value.push('&uid')  // ... use the logged-off user ID to establish the primary owner filter for usablity.
+          cmdlist.owner.uid = true
+        }
+      }
+    },
+    codepage: {  
+      long: '--codepage', short: '--cp',
+      tokens: ['0', '273', '277', '280', '284', '297', '297', '424', '833', '870', '875', '1026', '1047', '1122', '1141', '1143', '1145', '1147', '1149', '1159',
+               '37', '275', '278', '281', '285', '420', '500', '836', '871', '1025', '1027', '1112', '1140', '1140', '1142', '1144', '1146', '1148', '1153'], 
+      defaultValue: '1047', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: () => {
+        ansiLogOut('Page   Locale                       Default')
+        ansiLogOut('-----  ---------------------------  -------')
+        let cp = {  // Cribbed from webapp.js
+          0 : "Automatic",                       37 : "USA, Canada",
+          273 : "Austria, Germany",               275 : "Brazil",
+          277 : "Denmark, Norway",                278 : "Finland, Sweden",
+          280 : "Italy",                          281 : "Japanese (Latin)",
+          284 : "Spain, Latin America",           285 : "United Kingdom",
+          297 : "France",                         420 : "Arabic Bilingual",
+          424 : "Israel (Hebrew)",                500 : "International #5", 
+          833 : "Korean Extended",                836 : "Simplified Chinese",
+          870 : "Latin 2 Multilingual",           871 : "Iceland",
+          875 : "Greece",                        1025 : "Cyrillic Multilingual",
+          1026 : "Latin 5, Turkey",               1027 : "Japanese (Latin)",
+          1047 : "Latin 1 Open Systems",          1112 : "Baltic Multilingual",
+          1122 : "Estonia",                       1140 : "USA/Canada (Euro)",
+          1141 : "Austria, Germany (Euro)",       1142 : "Denmark, Norway (Euro)",
+          1143 : "Finland, Sweden (Euro)",        1144 : "Italy (Euro)",
+          1145 : "Spain, Latin America (Euro)",   1146 : "United Kingdom (Euro)",
+          1147 : "France (Euro)",                 1148 : "International (Euro)",
+          1149 : "Iceland (Euro)",                1153 : "Latin 2 Multilingual (Euro)",
+          1159 : "Traditional Chinese"
+        }
+        for (const [codepg, locale] of Object.entries(cp) ) {
+          ansiLogOut((codepg + '       ').substring(0, 7) + ((locale + ' '.repeat(29)).substring(0, 29)) + ((codepg == '1047') ? 'yes' : 'no'))
+        }
+      },
+      usage: ' [[' + DEFAULT + '--codepage' + RESET + ' | --cp] [' + Underscore + 'codepage' + NoUnderscore +' | ' +  DEFAULT + '1047' + RESET + ' ]]',
+      help: 'Change the code page set for your installation for output as UTF-8.\n\n' +
+            'Codepage 1047 for Latin 1 Open Systems is the default page.\n' +
+            'Note that not all consoles support the proper display of UTF-8\n' +
+            'characters.\n' +
+            'For a list of arguments, specify "list".\n\n' +
+            'EXAMPLE: ' + FLAG + '--codepage 424' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    width: {  
+      short: '-x', long: '--width',
+      tokens: [], defaultValue: widthTable.toString(), maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      usage: '[[-x | --width] ' + DEFAULT + Underscore + 'tty-default' + NoUnderscore + RESET + ' | ' + Underscore + 'number' + NoUnderscore + ' | all]' + RESET,
+      list: false, doList: (item) => {
+        ansiLogOut('Value         Default   Description   (' + item + ')')
+        ansiLogOut('------------  --------  -----------')
+        ansiLogOut(Underscore + 'tty-default' + NoUnderscore + '   yes       Value based on the number of columns on the unredirected terminal')
+        ansiLogOut('all           yes       The column width will not be truncated; default for redirected output')
+        ansiLogOut('number        no        Positive non-zero width in characters')
+      },
+      help: 'Use --width to specify the character width of a line.  If output is\n' +
+            'redirected and --width is not specified, the width of the console\n' +
+            'will be used.\n\n' +
+            'EXAMPLE: ' + FLAG + '--width 132' + RESET,
+      value: [], 
+      valueTable:  widthTable,
+      valueReport: widthReport,
+      after: (cmd) => {
+        if ( cmd.value.length > 0 )
+          if (cmd.value == 'all')
+            cmd.value[0] = 9999;
+          cmd.valueReport = cmd.valueTable = cmd.value[0]
+      }
+    },
+    lines: {  
+      short: '-y', long: '--lines',
+      tokens: [], defaultValue: maxLines.toString(), maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value         Default   Description   (' + item + ')')
+        ansiLogOut('------------  --------  -----------')
+        ansiLogOut(Underscore + 'tty-default' + NoUnderscore + '   yes       Value based on the number of rows on the unredirected terminal')
+        ansiLogOut('1000          yes       Default number of rows or lines for redirected output')
+        ansiLogOut('all           yes       All rows or lines will be output')
+        ansiLogOut('number        no        Positive non-zero number of allowed rows or lines')
+      },
+      usage: '[[-y |--lines] [' + DEFAULT + '1000' + RESET + ' | ' + DEFAULT + Underscore + 'tty-default' + NoUnderscore + RESET + '] | ' + Underscore + 'number' + NoUnderscore + ' | all]',
+      help: 'Use ' + FLAG + '--lines' + RESET + ' to specify the maximum number of lines in a table or report.\n' +
+            'You can also specify ' + FLAG + '--lines all' + RESET + ' to output all lines available.' +
+            'If output is not redirected and --lines is not specified, the number\n' +
+            'lines of the console will be used.  Header lines are counted as well as data lines.\n\n' +
+            'EXAMPLE: ' + FLAG + '--lines 60' + RESET,
+      value: [], 
+      maxLines: maxLines,
+      isAll: process.stdout.isTTY ? false : true,
+      linesSet: false,
+      after: (cmd) => {
+        if ( cmd.value.length > 0) {
+          cmd.maxLines = cmd.value[0]
+          cmd.linesSet = true
+          cmd.isAll = cmd.maxLines == 'all'
+          cmd.maxLines = cmd.isAll ? 99999999 : cmd.maxLines
+        }
+      }
+    },
+    start: {  
+      long: '--start',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value   Default  Description   (' + item + ')')
+        ansiLogOut('------  -------  -----------')
+        ansiLogOut('1       yes      Report starts at line 1')
+        ansiLogOut('number  no       Line to begin the report')
+      },
+      usage: '[--start [' + Underscore + 'number' + NoUnderscore + ' | 1 ]',
+      help: 'Specify the beginning line number for a report.\n\n' +
+      'EXAMPLE: ' + FLAG + '--start 100' + RESET,
+      value: [], start: 1,
+      after: (cmd) => { 
+        cmd.start = cmd.value.length > 0 ? Math.max(1,parseInt(cmd.value)) : 1 
+      }
+    },
+    version: {  
+      short: '-v', long: '--version', camel: '-V',
+      tokens: [], defaultValue: 'false', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value     Default  Description   (' + item + ')')
+        ansiLogOut('--------  -------  -----------')
+        ansiLogOut('<omitted> no       Verbose version information fetched from host')
+      },
+      usage: '[[-v | --version] [max]]',
+      help: 'Display the version information about (E)JES on the host.\n\n' +
+      'EXAMPLE: ' + FLAG + '--version' + RESET,
+      value: []
+    },
+    recfm: {  
+      long: '--recfm',
+      tokens: [], defaultValue: 'f', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value     Default  Description   (' + item + ')')
+        ansiLogOut('--------  -------  -----------')
+        ansiLogOut('F         yes      Fixed record format')
+        ansiLogOut('V         no       Variable length record format')
+      },
+      usage: '[[--recfm] [f|v]]',
+      help: 'Set the record format for a submit.\n\n' +
+      'EXAMPLE: ' + FLAG + '--recfm v' + RESET,
+      value: []
+    },
+    unit: {  
+      long: '--unit',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value     Default  Description   (' + item + ')')
+        ansiLogOut('--------  -------  -----------')
+        ansiLogOut('unitname  no       Generic or esoteric unit name where an uncataloged MVS data set resides.')
+      },
+      usage: '[[--unit] [number]]',
+      help: 'Set the generic or esoteric unit name where an uncataloged MVS data set resides for a submitted JCL deck.\n\n' +
+      'EXAMPLE: ' + FLAG + '--unit VSL001' + RESET,
+      value: []
+    },
+    volume: {  
+      long: '--volume',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value     Default  Description   (' + item + ')')
+        ansiLogOut('--------  -------  -----------')
+        ansiLogOut('volser    no       Volume serial where an uncataloged MVS data set resides.')
+      },
+      usage: '[[--volume] [volume-id]]',
+      help: 'Set the volume serial where an uncataloged MVS data set resides for a submitted JCL deck.\n\n' +
+      'EXAMPLE: ' + FLAG + '--volume SYS123' + RESET,
+      value: []
+    },
+    subsys: {  
+      long: '--subsys',
+      tokens: ['jes2', 'jes3'], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value     Default  Description   (' + item + ')')
+        ansiLogOut('--------  -------  -----------')
+        ansiLogOut('jes2      no       Submit to the JES2 subsystem.')
+        ansiLogOut('jes3      no       Submit to the JES3 subsystem.')
+      },
+      usage: '[[--subsys] [jes2|jes3]]',
+      help: 'Subsystem name where the job should be sent. If not speficied defaults to the subsystem\n' +
+            'under which the current (E)JES session is running.\n\n' +
+      'EXAMPLE: ' + FLAG + '--subsys jes2' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    lrecl: {  
+      long: '--lrecl',
+      tokens: [], defaultValue: '80', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value     Default  Description   (' + item + ')')
+        ansiLogOut('--------  -------  -----------')
+        ansiLogOut('80        yes      Logical record length of 80')
+        ansiLogOut('number    no       Number specifying a logincal record length')
+      },
+      usage: '[[--lrecl] [number]]',
+      help: 'Set the logical record length to use for a submit JCL deck.\n\n' +
+      'EXAMPLE: ' + FLAG + '--lrecl 132' + RESET,
+      value: []
+    },
+    submit: {  
+      short: '--sub', long: '--submit',
+      tokens: [], defaultValue: '?', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 4,
+      list: false, doList: (item) => {
+        ansiLogOut('Value           Default   Description   (' + item + ')')
+        ansiLogOut('--------        --------  -----------')
+        ansiLogOut('host arguments  required  Arguments used by host command.  For local submit, use <local:path>')
+        ansiLogOut('\n' + cmdlist.submit.usage + '\n')
+      },
+      usage: '[[-sub | --submit] "[local:path|host file] [lrecl(number)] [recfm(fixed|variable)] [unit(unit-id)] [volume(volume-id)] [subsys(jes2|jes3)]"',
+      help: 'Display the version information about (E)JES on the host.\n\n' +
+      'EXAMPLE: ' + FLAG + '--submit "local:IEFPBR14.JCL"' + RESET,
+      value: [],
+      after: (cmd) => {
+        if ( ! cmd.value[0] || cmd.value[0] == '?' ) {
+          ansiErrOut(ERROR + 'Invalid argument: "' + ITEM + '<required value omitted>' + ERROR + '", Option: ' + ERROR + cmd.long + ERROR + RESET)
+          cmd.doList && cmd.doList(cmd.long.substring(2))
+          term.exitNow(23, true)
+        }
+      }
+    },
+    jsonoutput: {  
+      short: '--rfj', long: '--response-format-json',
+      tokens: [], defaultValue: 'false', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 0,
+      list: false,
+      usage: '[--rfj | --response-format-json]',
+      help: 'JSON output.\n\n' +
+      'EXAMPLE: ' + FLAG + '--response-format-json' + RESET,
+      value: []
+    },
+    zoweProfile: {  
+      zowe: '--ejes-p', long: '--ejes-profile',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
+      list: false,
+      usage: '[--ejes-p | --ejes-profile]',
+      help: 'Zowe runtime profile selection.  Use --profile when running under pure node.\n\n' +
+      'EXAMPLE: ' + FLAG + '--ejes-profile jes2' + RESET,
+      value: []
+    },
+    dryrun: {  
+      short: '-n', long: '--dry-run',
+      tokens: ['syntax', 'check', 'all'], defaultValue: 'syntax', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      usage: '[[-n | --dry-run] [syntax | check | all]]',
+      list: false, doList: (item) => {
+        ansiLogOut('Value    Default  Description   (' + item + ')')
+        ansiLogOut('-------  -------  -----------')
+        ansiLogOut('syntax   yes      Check syntax and check host authorization only.')
+        ansiLogOut('check    no       Run transaction with --debug 4 on but without enumerating data.')
+        ansiLogOut('all      no       Same as check but enumerates data.')
+      },
+    help: 'Breakdown optimized host command lists to parcel out individual commands in order to\n' +
+          'view errors and warnings that might  otherwise be missed.  For example, if you were to\n' +
+          'specify a table you were not authorized for or was unsupported, ' + FLAG + '--dry-run' + RESET + ' check\n' +
+          'would reveal an EJES error message that you would not otherwise see.\n' +
+          'EXAMPLE: ' + FLAG + '--dry-run syntax' + RESET,
+      args: ['syntax', 'check', 'all'],
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    header: {  
+      long: '--header',
+      tokens: ['on', 'off'], defaultValue: 'on', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value  Default  Description   (' + item + ')')
+        ansiLogOut('-----  -------  -----------')
+        ansiLogOut('on     yes      Table output has two header lines')
+        ansiLogOut('off    no       Table output has no header lines')
+      },
+      usage: '[' + DEFAULT + '--header' + RESET + ' [' + DEFAULT + 'on' + RESET + ' | off]]',
+      help: 'Display header lines in table output (the default).\n' +
+            'Specify "off" to remove headers from output.\n\n' +
+            'EXAMPLE: ' + FLAG + '--header off' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    syscmd: {  
+      long: '--syscmd',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: NO_MAX,
+      usage: '[--syscmd system-command]',
+      list: false, doList: (item) => {
+        ansiLogOut('Value   Description   (' + item + ')')
+        ansiLogOut('-----   -----------')
+        ansiLogOut('text    A system command prefixed with forward slash')
+      },
+      help: 'Use to issue a system command under your credentials.\n' +
+            'Prefix with a forward slash.  Do not use semicolons.\n\n' +
+            'EXAMPLE: ' + FLAG + '--syscmd /d t' + RESET,
+      value: []
+    },
+    profile: {  
+      long: '--profile', camel: '--prof', short: '-p',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        try {
+          var files = fs.readdirSync(os.homedir() + '/.ejes/profile/', {withFileTypes: true})
+          var defaultProfile = auth.getDefaultProfile()
+          ansiLogOut('Value')
+          ansiLogOut('------------------------')  
+          files.forEach((item) => {
+            if ( item.isFile )
+              ansiLogOut(item.name + (defaultProfile == item.name.toLowerCase() ? ' (default)' : ''))
+          })
+        }
+        catch(err) {
+          ansiErrOut(ERROR + 'Error trying to read profile directory while trying to list profiles.' + RESET)
+          ansiErrOut(err)
+        }
+      },
+      usage: '[[--p | --prof | --profile] ' + Underscore + 'profile-name' + NoUnderscore + ']',
+      help: 'Use --profile to specify the (E)JES profile to use.\n\n' +
+      'EXAMPLE: ' + FLAG + '--profile jes3plus' + RESET,
+      value: [],
+      after: (cmd) => { 
+        if ( cmd.value.length == 0 || ! fs.existsSync(os.homedir() + '/.ejes/profile/' + cmd.value[0])) {
+          ansiErrOut('ERROR: --profile requires the name of an existing profile.  Use list argument.  Do not specify the extension or path.')
+          term.exitNow(56, true)
+        }
+      }
+    },
+    user: {
+      long: '--user',
+      tokens: [], defaultValue: [], maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value             Description   (' + item + ')')
+        ansiLogOut('----------------  -----------')
+        ansiLogOut('user id           Your user ID (usually your TSO logon)')
+      },
+      usage: '[--user ' + Underscore + 'uid' + NoUnderscore + ']',
+      help: 'Provide user id credential, typically same as for signing on to TSO.\n' +
+            'Please use the ' + FLAG + 'Zowe Profile' + RESET + ' commands instead where possible.\n' +
+            'Pure node users use the ' + FLAG + 'Node Ejes Profiles' + RESET + ' command instead.\n\n' +
+      'EXAMPLE: ' + FLAG + '--user johndoe' + RESET,
+      value: []
+    },
+    password: {
+      long: '--password', zowe: '--pass', camel: '--pw',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value             Description   (' + item + ')')
+        ansiLogOut('----------------  -----------')
+        ansiLogOut('password          Your password (usually for your TSO logon)')
+      },
+      usage: '[[--pw | --pass | --password] ' + Underscore + 'password' + NoUnderscore + '"]]',
+      help: 'Provide password credential, typically same as for signing on to TSO.\n' +
+            'Please use the ' + FLAG + 'Zowe Profile' + RESET + ' commands instead where possible.\n' +
+            'Pure node users use the ' + FLAG + 'Node Ejes Profiles' + RESET + ' command instead.\n\n' +
+      'EXAMPLE: ' + FLAG + '--password pi0ria' + RESET,
+      value: []
+    },
+    host: {
+      long: '--host',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value             Description   (' + item + ')')
+        ansiLogOut('----------------  -----------')
+        ansiLogOut('host name         The address of (E)JES RESTapi server running on host without https:// or http://')
+      },
+      usage: '[--host ' + Underscore + 'address' + NoUnderscore + '"]]',
+      help: 'Provide host address for the (E)JES RESTapi server.\n' +
+            'Please use the ' + FLAG + 'Zowe Profile' + RESET + ' commands instead where possible.\n' +
+            'Pure node users use the ' + FLAG + 'Node Ejes Profiles' + RESET + ' command instead.\n\n' +
+      'EXAMPLE: ' + FLAG + '--host zoshost.com' + RESET,
+      value: []
+    },
+    port: {
+      long: '--port',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value             Description   (' + item + ')')
+        ansiLogOut('----------------  -----------')
+        ansiLogOut('port number       The port on which (E)JES RESTapi server is waiting for work')
+      },
+      usage: '[--port ' + Underscore + 'address' + NoUnderscore + '"]]',
+      help: 'Provide port address for the (E)JES RESTapi server.\n' +
+            'Please use the ' + FLAG + 'Zowe Profile' + RESET + ' commands instead where possible.\n' +
+            'Pure node users use the ' + FLAG + 'Node Ejes Profiles' + RESET + ' command instead.\n\n' +
+      'EXAMPLE: ' + FLAG + '--port 7557' + RESET,
+      value: []
+    },
+    protocol: {
+      long: '--protocol', zowe: '--prot',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value             Description   (' + item + ')')
+        ansiLogOut('----------------  -----------')
+        ansiLogOut('https             The typical protocol for the server')
+        ansiLogOut('http              Other protocol for the server')
+      },
+      usage: '[--protocol ' + Underscore + 'http[s]' + NoUnderscore + '"]]',
+      help: 'Zowe Specific.  Provide protocol for Zowe ejes log.  Zowe ejes emulate and Zowe ejes query always use https.\n' +
+            'Please use the ' + FLAG + 'Zowe Profile' + RESET + ' commands instead where possible.\n' +
+            'Only HTTPS is supported for pure node use.\n\n' +
+      'EXAMPLE: ' + FLAG + '--protocol https' + RESET,
+      value: []
+    },
+    basepath: {
+      long: '--base-path', camel: '--bp',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value             Description   (' + item + ')')
+        ansiLogOut('----------------  -----------')
+        ansiLogOut('path fragment     Path appended to the host component and port to create a fully qualified URL for the (E)JES RESTapi')
+      },
+      usage: '[--base-path ' + Underscore + 'address' + NoUnderscore + '"]]',
+      help: 'Provide the base path as indicated for the RESTapi documentation or in the Zowe Gateway.\n' +
+            'Please use the ' + FLAG + 'Zowe Profile' + RESET + ' commands instead where possible.\n' +
+            'Pure node users use the ' + FLAG + 'Node Ejes Profiles' + RESET + ' command instead.\n\n' +
+      'EXAMPLE: ' + FLAG + '--base-path /api/v1/ejes' + RESET,
+      value: []
+    },
+    rejectUnauthorized: {
+      long: '--reject-unauthorized', camel: '--ru',
+      tokens: [], defaultValue: 'true', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value             Description   (' + item + ')')
+        ansiLogOut('----------------  -----------')
+        ansiLogOut('true              Reject self-signed certificates')
+        ansiLogOut('false             Do not reject self-signed certificates')
+      },
+      usage: '[--reject-unauthorized [true | ' + DEFAULT + 'false' + RESET + ']"]]',
+      help: 'All users should code true to reject self-signed certificates.\n' +
+            'Please use the ' + FLAG + 'Zowe Profile' + RESET + ' commands instead where possible.\n' +
+            'Pure node users use the ' + FLAG + 'Node Ejes Profiles' + RESET + ' command instead.\n\n' +
+      'EXAMPLE: ' + FLAG + '--reject-unauthorized true' + RESET,
+      value: [],
+      after: (cmd) => {
+        ejes.rejectUnauthorized = cmd.value[0] ? cmd.value[0] == 'true' : ejes.rejectUnauthorized  // Actual Zowe value overrides under Zowe.
+      }
+    },
+    max: {  
+      long: '--max',
+      tokens: ['on'], defaultValue: 'on', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => { ansiLogOut('This option does not accept arguments.') },
+      usage: '[--max]',
+      help: 'Change level of detail to show maximum number of columns on these\n' +
+            'tables: activity, djc, hold, input, job status, nje, and writer.\n' + 
+            'Added columns can be detailed using --max --showcols list.\n\n' +
+            'EXAMPLE: ' + FLAG + '--max' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    metafilter: {  
+      short: '-m', long: '--metafilter',
+      tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 63,
+      list: false,
+      usage: '[[-m | --metafilter] [' + DEFAULT + 'off' + RESET + ' | ' + Underscore + 'metafilter_construct' + NoUnderscore + '...]]…',
+      help: 'Establish column filtering for row selection purposes.\n' +
+            'Metafilters may be specified for each table.  Specify --metafilter off\n' +
+            'for any table not filtered for which you will filter a child table.\n' +
+            'Up to 16 metafilters may be specified together with the elements\n' +
+            'separated by spaces.  The format is as follows:\n\n' +
+            FLAG + 'key' + RESET + " [eq|ne|gt|lt|ge|le] [']value['] [[and | or]  " + FLAG + 'key' + RESET + " [eq|ne|gt|lt|ge|le] [']value[']]...\n\n" +
+            'Neither single- nor double-quotes are are allowed.\n' +
+            'The ' + FLAG + 'key' + RESET + ' value may be the column-key or the native-key.\n' +
+            'Use --metafilter list to view the column-keys and native-keys.\n' +
+            'Repeatable option.  Specify ' + FLAG + '--help repeat' + RESET + ' for additional information.\n\n' +
+            'EXAMPLE: ' + FLAG + '--metafilter maxcomp eq ab* or maxcomp eq jclerr' + RESET,
+      value: []
+    },
+    sort: {  
+      short: '-z', long: '--sort',
+      tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 32,
+      list: false,
+      usage: '[' + DEFAULT + '--z' + RESET + ' | ' + DEFAULT + '--sort' + RESET + '[' + DEFAULT + 'off' + RESET + ' | ' + Underscore + 'sort_construct' + NoUnderscore + ']',
+      help: 'Establish column sorting to order rows for easier selection.\n' +
+            'Sorts may be specified for each table.  Specify --sort off\n' +
+            'for any table not sorted for which you will filter a child table.\n' +
+            'Up to 4 column sorts may be specified together with the elements\n' +
+            'separated by spaces.  The format is as follows:\n\n' +
+            '[[default [a|d] | name [a|d] | num [a|d] | priority [a|d] | time [a|d] ] | [' + FLAG + 'key' + RESET + ' [a|d]]]]...\n\n' + 
+            'If the value contains spaces, enclose it in single quotes.\n' +
+            'No other use of single quotes is allowed.\n' +
+            'Double-quotes are not allowed to be embedded.\n' +
+            'The ' + FLAG + 'key' + RESET + ' value may be the column-key or the native-key.\n' +
+            'Use --sort list to view the column-keys and native-keys.\n' +
+            'Repeatable option.  Specify ' + FLAG + '--help repeat' + RESET + ' for additional information.\n\n' +
+            'EXAMPLE: ' + FLAG + '--sort maxcomp d records a' + RESET,
+      value: []
+    },
+    showcols: {  
+      short: '-w', long: '--showcols',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: NO_MAX,
+      list: false,
+      usage: '[[-w|--showcols] ' + Underscore + 'column-key' + NoUnderscore + '...]',
+      help: 'Establish the columns and the order of those columns in the displayed\n' +
+            'table.  The specified columns may be the column-key or the native-key.\n' +
+            'Use --showcols list to view the column-keys and native-keys.\n\n' +
+            'EXAMPLE: ' + FLAG + '--showcols jobname jobid maxcomp status lines' + RESET,
+      value: []
+    },
+    hidecols: {  
+      long: '--hidecols',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: NO_MAX,
+      list: false,
+      usage: '[--hidecols ' + Underscore + 'column-key' + NoUnderscore + '...]',
+      help: 'Subtract columns from columns displayed in the table.  The specified\n' +
+            'columns may be the column-key or the native-key.  The option applies\n' +
+            'only to the displayed table and may be specified only once.  The option\n' +
+            FLAG + '--showcols' + RESET + ' will be used instead if specified.\n' +
+            'Use ' + FLAG + '--hidecols list' + RESET + ' to view the column-keys and native-keys.\n\n' +
+            'EXAMPLE: ' + FLAG + '--showcols jobname jobid maxcomp status lines' + RESET,
+      value: []
+    },
+    command: {  
+      short: '-c', long: '--command',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
+      list: false,
+      usage: '[[-c | --command] [list | command[argument]]',
+      help: 'Issue a command against the selected (displayed) rows of the table.\n' +
+            'A command may include an argument, if allowed, with not intervening\n' +
+            'spaces.  Unless --immediate is also specified, each row will be\n' +
+            'displayed with a yes/no/all/cancel prompt.  The option will only run\n' +
+            'in interactive mode.  Redirected output ' + Underscore + 'is not compatible' + NoUnderscore + '.\n' + 
+            'Use ' + FLAG + '--command list' + RESET + ' to view the availabe commands.\n\n' +
+            'EXAMPLE: ' + FLAG + '--command rmount' + RESET + '   (Reply "mount" on sysreq)\n' +
+            'EXAMPLE: ' + FLAG + '--command c     ' + RESET + '   (Cancel job on status)',
+      value: []
+    },
+    immediate: {  
+      short: '-i', long: '--immediate',
+      tokens: ['fast', 'slow'], defaultValue: 'fast', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value  Default  Description   (' + item + ')')
+        ansiLogOut('-----  -------  -----------')
+        ansiLogOut('fast   yes      All commands are submitted together for a quick response')
+        ansiLogOut('slow   no       Commands are issued one-by-one and each response is noted')
+      },
+      usage: '[[-i | --immediate] [' + DEFAULT + 'fast' + RESET + ' | slow]',
+      help: 'When issued in conjunction with ' + FLAG + '--command' + RESET + ', the specified command is\n' +
+            'issued against all selected (displayed) rows of the table without\n' +
+            'exception.  The option is invalid when output is redirected.  Use\n' +
+            FLAG + '--confirm' + RESET + ' instead.\n\n' +
+            'The argument ' + FLAG + 'slow' + RESET + ' waits for a response before issuing the next command,\n' +
+            'allowing command sequencing to be interrupted during command processing.\n' +
+            'The argument ' + FLAG + 'fast' + RESET + ' issues all the commands at one time and is the default.\n' +
+            'Fast processing may fail to issue commands if the system responds with\n' +
+            'an error.  Use ' + FLAG + 'slow' + RESET + ' instead.\n' +
+            Underscore + 'This options intended for use with non-destructive commands.' + NoUnderscore + '\n\n' +
+            'EXAMPLE: ' + FLAG + '--command rmount --immediate  ' + RESET + '  (Reply "mount" to all rows on sysreq)',
+      value: [], after: (cmd) => { 
+        cmdlist.invalidArgument(cmd)
+        cmdlist.doReparse('confirm') // Confirm follows immediate in parse order, so we need to reparse it first to properly test.
+        if ( cmdlist.confirm.value[0] || cmdlist.report.value[0] ) {
+          ansiErrOut(FLAG + '--immediate' + ERROR + ', ' + RESET + FLAG + '--confirm' + ERROR + ', and ' + RESET + FLAG + '--report' + ERROR + ' may not be used together.' + RESET)
+          term.exitNow(22, true)
+        }
+      }
+    },
+    confirm: {
+      long: '--confirm',
+      list: false, doList: () => { cmdlist.max.doList() },
+      tokens: ['on'], defaultValue: 'on', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      usage: '[--confirm]',
+      help: 'When issued in conjunction with ' + FLAG + '--command' + RESET + ', the CLI queues the keys required\n' +
+            'to find the objects represented by the rows of the presented table.  Inspect\n' +
+            'the table, then run the CLI with only the ' + FLAG + '--confirm' + RESET + ' option to send the\n' +
+            'commands to be processed on the host.  Running the CLI without the\n' +
+            FLAG + '--confirm' + RESET + ' option, or with the ' + FLAG + '--confirm' + RESET + ' option and the ' + FLAG + '--command' + RESET + ' option\n' + 
+            'clears the queue and cancel command processing.  A message is issued to\n' +
+            'indicate queued command were canceled.  (During confirm processing, the\n' +
+            'positional parameter to specify the primary table is ignored.)  Zowe\n' +
+            'users will need to specify ' + FLAG + '--confirm' + RESET + ' on.\n\n' +
+            'EXAMPLE: ' + FLAG + '--command c --confirm  ' + RESET + '  (Queue cancel command on status)\n' +
+            'EXAMPLE: ' + FLAG + '--confirm' + RESET + '              ' + RESET + '  (Confirm and perform command on status)\n' +
+            'EXAMPLE: ' + FLAG + '<any option or default>' + RESET + '  (Cancel queued comands on status)\n',
+      value: [],
+      after: (cmd) => {
+        cmdlist.invalidArgument(cmd)
+        if ( cmdlist.confirm.value[0] && (cmdlist.immediate.value[0] || cmdlist.report.value[0]) ) {
+          ansiErrOut(FLAG + '--immediate' + ERROR + ', ' + RESET + FLAG + '--confirm' + ERROR + ', and ' + RESET + FLAG + '--report' + ERROR + ' may not be used together.' + RESET)
+          term.exitNow(22, true)
+        }
+      }
+    },
+    actpurge: {  
+      long: '--actpurge',
+      tokens: ['on'], defaultValue: 'on', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => { ansiLogOut('This option does not accept arguments.') },
+      usage: '[--actpurge]',
+      help: 'Enable cancel/purge commands for executing jobs on job-oriented tables.\n' +
+            'When the option is used, a cancel/purge commands are allowed against any\n' +
+            'job whether executing or not.  It is off when the option is not used\n' +
+            'to help you avoid accidentally canceling an executing job when cleaning\n' +
+            'up your queues.\n\n' +
+            'EXAMPLE: ' + FLAG + '--actpurge --command c --immediate' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    acplex: {  
+      long: '--acplex',
+      tokens: ['jes', 'sys'], defaultValue: 'jes', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
+      list: false,  doList: (item) => {
+        ansiLogOut('Value  Default  Description   (' + item + ')')
+        ansiLogOut('-----  -------  -----------')
+        ansiLogOut('jes    yes      JESplex-wide scope')
+        ansiLogOut('sys    no       Sysplex-wide scope')
+      },
+      usage: '[--actpurge [' + DEFAULT + 'jes' + RESET + ' | sys]',
+      help: 'Set the data gathering scope for the Activity display.\n' +
+            'The default of ' + FLAG + 'JES' + RESET + ' indicates a JESplex-wide scope. This scope depends on (E)JES\n' +
+            'CAS servers to gather data from other systems and send it back to you. This is the\n' +
+            'most efficient way of obtaining the information because multiple users on the same\n' +
+            'requesting system can share the same CAS request/response flows. JESplex-wide information\n' +
+            'can be obtained using a commercial monitor product, such as IBM’s RMF or BMC’s CMF, or\n' +
+            'using native (E)JES facilities.\n' +
+            '\n' +
+            'A value of ' + FLAG + 'SYS' + RESET + ' indicates a sysplex-wide scope. This scope depends entirely on a\n' +
+            'Monitor II sysplex data gathering service provided by a commercial monitor product,\n' +
+            'even for the current system’s data. Sysplex-wide data cannot be obtained using native\n' +
+            '(E)JES facilities.\n\n' +
+            'EXAMPLE: ' + FLAG + '--acplex sys' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    curstep: {  
+      long: '--curstep',
+      tokens: ['on', 'off'], defaultValue: 'on', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value  Default  Description   (' + item + ')')
+        ansiLogOut('-----  -------  -----------')
+        ansiLogOut('on     no       Enable extra columns on JES2 Input and Job Status')
+        ansiLogOut('off    yes      Disable extra columns')
+      },
+      usage: '[--curstep]',
+      help: 'Enable the display of current step number, number of steps, and current step name\n' +
+            'information on the JES2 Input and Job Status tables.\n' +
+            '\n' +
+            'Additional overhead is required to display these columns. This command allows you to\n' +
+            'control that overhead. \n\n' +
+            'EXAMPLE: ' + FLAG + '--curstep on' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    setup: {  
+      long: '--setup',
+      tokens: ['on', 'off'], defaultValue: 'on', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value  Default  Description   (' + item + ')')
+        ansiLogOut('-----  -------  -----------')
+        ansiLogOut('on     no       Show required attributes of devices in setup status')
+        ansiLogOut('off    yes      Show current attributes of devices in setup status')
+      },
+      usage: '[--setup]',
+      help: 'Control the display of attributes required to setup specific devices on the Printer/Punch display.\n' +
+            '\n' +
+            'With SETUP enabled, the Printer/Punch display shows the required attributes of devices in setup\n' +
+            'status. With SETUP disabled, the Printer/Punch display shows the current attributes of devices in\n' +
+            'setup status. The affected columns are:\n' +
+            '\n' +
+            'Forms ID   Flash ID                             Stacker Selection\n' +
+            'FCB ID     Copymod ID, TRC, and Hold Request\n' +
+            'UCS ID     Character Arrangement Table IDs\n\n' +
+            'EXAMPLE: ' + FLAG + '--setup on' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    deltxt: {  
+      long: '--deltxt',
+      tokens: ['on', 'off'], defaultValue: 'on', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value  Default  Description   (' + item + ')')
+        ansiLogOut('-----  -------  -----------')
+        ansiLogOut('on     no       Possibly recover and output a canceled or printed data set in the JES spool')
+        ansiLogOut('off    yes      Ignore data set entries that have been fully processed in the JES spool')
+      },
+      usage: '[--deltxt]',
+      help: 'Enable or disable the output of data set entries that have already been fully processed by JES.\n' +
+            'Enabling DELTXT may allow you to recover a canceled or printed data set if it can still be found\n' +
+            'in the JES spool.\n\n' +
+            'EXAMPLE: ' + FLAG + '--deltxt on' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    inptxt: {  
+      long: '--inptxt',
+      tokens: ['on', 'off'], defaultValue: 'on', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value  Default  Description   (' + item + ')')
+        ansiLogOut('-----  -------  -----------')
+        ansiLogOut('on     no       Output in-stream SYSIN data sets')
+        ansiLogOut('off    yes      Ignore in-stream SYSIN data sets')
+      },
+      usage: '[--inptxt]',
+      help: 'Enable or disable the output of in-stream SYSIN data sets.\n\n' +
+            'EXAMPLE: ' + FLAG + '--inptxt on' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    systxt: {  
+      long: '--systxt',
+      tokens: ['on', 'off'], defaultValue: 'on', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value  Default  Description   (' + item + ')')
+        ansiLogOut('-----  -------  -----------')
+        ansiLogOut('on     no       Output internal JES data sets')
+        ansiLogOut('off    yes      Ignore internal JES data sets')
+      },
+      usage: '[--systxt]',
+      help: 'Enable or disable output of internal JES data sets\n\n' +
+            'EXAMPLE: ' + FLAG + '--systxt on' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    numchar: {  
+      long: '--numchar',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value   Default  Description   (' + item + ')')
+        ansiLogOut('-----   -------  -----------')
+        ansiLogOut('<M><D>  no       Numeric magnitude separator followed by decimal separator.')
+        ansiLogOut('\nNOTE: If either separator is a blank, or the numeric separator is a comma, use single quotes (apostrophes).')
+      },
+      usage: '[--numchar \'<magnitude>[<decimal>]\]',
+      help: 'Use this option to establish the numeric magnitude and decimal separator character\n' +
+            'to be used when formatting numeric values.\n' +
+            '\n' + 
+            'Enclose in single quotes (apostrophes) to ensure the command parser accepts the argument.\n\n' +
+            'EXAMPLE: ' + FLAG + '--numchar \',.\'' + RESET,
+      value: []
+    },
+    datefmt: {  
+      long: '--datefmt',
+      tokens: ['yyyyddd .',  'yyyyddd -',  'yyyyddd',
+               'yyyymmdd /', 'yyyymmdd -', 'yyyymmdd',
+               'yyyyddmm /', 'yyyyddmm -', 'yyyyddmm',
+               'mmddyyyy /', 'mmddyyyy -', 'mmddyyyy',
+               'ddmmyyyy /', 'ddmmyyyy -', 'ddmmyyyy'], 
+      defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 2,
+      list: false, doList: (item) => {
+        ansiLogOut('date      optional separator  Description   (' + item + ')')
+        ansiLogOut('--------  ------------------  -----------')
+        ansiLogOut('YYYYDDD   . or -              Julian date.')
+        ansiLogOut('YYYYMMDD  / or -              Year Month Day date.')
+        ansiLogOut('YYYYDDMM  / or -              Year Day Month date.')
+        ansiLogOut('MMDDYYYY  / or -              Month Day Year date.')
+        ansiLogOut('DDMMYYYY  / or -              Day Month Year date.')
+        ansiLogOut('\nNOTE: If you specify a separator, enclose both arguments in double-quotes.')
+      },
+      usage: '[--datefmt [yyydd[ [. | -] | [yyyymmdd | yyyyddmm | mmddyyyy | ddmmyyyy] [/ | -]]]',
+      help: 'Customize date formatting.  Issue --datefmt list for more information.\n\n' +
+            'EXAMPLE: ' + FLAG + '--datefmt "yyyyddd ."' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    sysname: {  
+      long: '--sysname',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value          Description   (' + item + ')')
+        ansiLogOut('-----          -----------')
+        ansiLogOut('<system-mask>  Mask value to set the server system name filter.')
+        ansiLogOut('""             Select current system only.  Double-quotes required.')
+        ansiLogOut('*              Select all systems.')
+      },
+      usage: '[--sysname [<system-mask> | "" | *]]',
+      help: 'Set the server system name filter. This filter limits the systems from which\n' +
+            'peer-to-peer remote server data is gathered.\n\n' +
+            'EXAMPLE: ' + FLAG + '--sysname zosp*' + RESET,
+      value: []
+    },
+    countOnly: {  
+      long: '--count', zowe: '--countOnly', camel: '--co',
+      tokens: ['on'], defaultValue: 'on', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => { ansiLogOut('This option does not accept arguments.') },
+      usage: '[--countOnly | --count | --co ]',
+      help: 'When a table or report is selected for output, only output the "Rows available" line.\n' +
+            'Normally output only to stderr, if output is redirected it is also output to stdout.\n' +
+            'Use this option to log only the number of selected rows or lines, not the rows or\n' +
+            'lines themselves.  This option is disabled during command processing and when issuing\n' +
+            'system commands.\n\n' +
+            'EXAMPLE: ' + FLAG + '--countOnly' + RESET,
+      value: [],
+      after: (cmd) => cmdlist.invalidArgument(cmd)
+    },
+    select: {  
+      short: '-s', long: '--select',
+      tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 1, maxArgumentCount: 2,
+      list: false,
+      usage: '[[-s | --select] [' + DEFAULT + 'off' + RESET + ' | ' + Underscore + 'select_construct' + NoUnderscore + ']',
+      help: 'Establish table-specific selection criteria for a table.  When ' + FLAG + '--select' + RESET + '\n' +
+            'is specified, ' + FLAG + '--metafilters and other selection criteria, such as\n' +
+            FLAG + '--owner' + RESET + ', ' + FLAG + '--jobname' + RESET + ', ' + FLAG + '--job' + RESET + ', etc., are ignored even if specified.\n\n' +
+            '(E)JES environment symbols and z/OS system symbols may be used with\n' +
+            'specifying the criteria.  Refer to the (E)JES Reference Manual for the\n' +
+            'former and the symbols table (--use symbols) for the latter.  In some\n' +
+            'environments, the ampersand argument must be enclosed in quotes as used\n' +
+            'in the example below.\n\n'+
+            'One or two criteria are available on supported tables.  To specify only\n' +
+            'the second criterian, specify * for the first.\n' +
+            'Use ' + FLAG + '--select list' + RESET + ' to view criteria available for a table, if any.\n' +
+            'Repeatable option.  Specify ' + FLAG + '--help repeat' + RESET + ' for additional information.\n\n' +
+            'EXAMPLE: ' + FLAG + '--select myjob      ' + RESET + ' (Select jobs named "myjob" only on sysreq)\n' +
+            'EXAMPLE: ' + FLAG + '--select * j0123456 ' + RESET + ' (Select a specific job by number status)\n' +
+            'EXAMPLE: ' + FLAG + '--select *c*        ' + RESET + ' (Select all classes containing "c" on classes)\n' +
+            'EXAMPLE: ' + FLAG + '--select "&sysname."' + RESET + ' (Select systems containing the current system on SYSPLEX)\n',
+      value: []
+    },
+    cc: {
+      long: '--cc',
+      tokens: ['discard', 'interpret', 'keep'], defaultValue: 'discard', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value      Default  Description   (' + item + ')')
+        ansiLogOut('-----      -------  -----------')
+        ansiLogOut('discard    no       Discard carriage-control')
+        ansiLogOut('interpret  no       Interpret carriage-control into cariage returns, linefeeds, and form feeds')
+        ansiLogOut('keep       no       Keep character control characters as-is in output')
+      },
+      usage: '[' + DEFAULT + '--cc' + RESET + ' [' + DEFAULT + 'discard' + RESET + ' | keep | interpret]',
+      help: 'Establish carriage control handling for downloaded reports.',
+      value: [],
+      after: (cmd) => { 
+        cmdlist.invalidArgument(cmd); 
+        cmd.value[0] = cmd.value[0].toUpperCase() // Required capitalization}
+      }
+    },
+    pdf: {
+      long: '--pdf', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      tokens:  [],
+      defaultValue: '?',
+      list: false, doList: (item) => {
+        ansiLogOut('Value      Default  Description   (' + item + ')')
+        ansiLogOut('-----      -------  -----------')
+        ansiLogOut('<omitted>  yes      Use a file name supplied by host that matches the job or data set name.')
+        ansiLogOut('<path>     no       A file name or path to store the file.  If necessary, end with ".pdf".')
+        ansiLogOut('\nNote: If set, EJES_DOWNLOAD_PATH (the download folder path) will be prepended if the value is not a full path.')
+        ansiLogOut(  '      EJES_DOWNLOAD_PATH setting: ' + ITEM + (process.env.EJES_DOWNLOAD_PATH && process.env.EJES_DOWNLOAD_PATH.length > 0 ? process.env.EJES_DOWNLOAD_PATH : HILITE + '<not set>') + '\n' + RESET)       
+      },
+      usage: '[' + DEFAULT + '--pdf' + RESET + ' [ | <file name or path>]',
+      help: 'Valid only for reports (browsed output).  Request a PDF version of the\n' +
+            'report.  The host supplies a file name that matches the job of data set\n' +
+            'name so an argument is not required.  Optional, supply a file name or a\n' +
+            'full path for output.  If the resultant value is not a full path, the\n' +
+            'file is stored in the current working directory.  If EJES_DOWNLOAD_PATH\n' +
+            'is set in the environment, the value will be prepended instead.  When\n' +
+            'specified and a line count is not specified, entire report will output.\n' +
+            'Will overwrite existing file.  Cannot be used with ' + ITEM + '--text' + RESET + '.',
+        value: [], after: (cmd) => { 
+            if ( cmdlist.text.value[0] && cmdlist.pdf.value[0] ) {
+            ansiErrOut(FLAG + '--text' + ERROR + ' and ' + RESET + FLAG + '--pdf' + ERROR + ' may not be used together.' + RESET)
+            term.exitNow(36, true)
+          }
+        }
+    },
+    text: {
+      long: '--text', short: '--txt', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1, 
+      tokens:  [],
+      defaultValue: '?',
+      list: false, doList: (item) => {
+        ansiLogOut('Value      Default  Description   (' + item + ')')
+        ansiLogOut('-----      -------  -----------')
+        ansiLogOut('<omitted>  yes      Use a file name supplied by host that matches the job or data set name.')
+        ansiLogOut('<path>     no       A file name or path to store the file.  If necessary, end with ".txt".')
+        ansiLogOut('\nNote: If set, EJES_DOWNLOAD_PATH (the download folder path) will be prepended if the value is not a full path.')
+        ansiLogOut(  '      EJES_DOWNLOAD_PATH setting: ' + ITEM + (process.env.EJES_DOWNLOAD_PATH && process.env.EJES_DOWNLOAD_PATH.length > 0 ? process.env.EJES_DOWNLOAD_PATH : HILITE + '<not set>') + '\n' + RESET)       
+      },
+      usage: '[' + DEFAULT + '--text | --txt' + RESET + ' [ | <file name or path>]]',
+      help: 'Valid only for reports (browsed output).  Request a text version of the\n' +
+            'report.  Optional.  If not specified, at text report is output to stdout.\n' +
+            'The host supplies a file name that matches the job of data set\n' +
+            'name so an argument is not required.  Optional, supply a file name or a\n' +
+            'full path for output.  If the resultant value is not a full path, the\n' +
+            'file is stored in the current working directory.  If EJES_DOWNLOAD_PATH\n' +
+            'is set in the environment, the value will be prepended instead.  When\n' +
+            'specified and a line count is not specified, entire report will output.\n' +
+            'Will overwrite existing file.  Cannot be used with ' + ITEM + '--pdf' + RESET + '.',
+      value: [], after: (cmd) => { 
+        if ( cmdlist.text.value[0] && cmdlist.pdf.value[0] ) {
+          ansiErrOut(FLAG + '--text' + ERROR + ' and ' + RESET + FLAG + '--pdf' + ERROR + ' may not be used together.' + RESET)
+          term.exitNow(36, true)
+        }
+      }
+    },
+    invalidArgument: (cmd) => { // FUNCTION: Check the list of tokens.  If the argument is not in there, blat out a message
+      if ( ! cmd.tokens.some((arg) => { return cmd.value[0].toLowerCase() == arg.toLowerCase()}) ) {
+        ansiErrOut(ERROR + 'Invalid argument: "' + ITEM + cmd.value[0] + ERROR + '", Option: ' + ERROR + cmd.long + ERROR + RESET)
+        cmd.doList && cmd.doList(cmd.long.substring(2))
+        term.exitNow(23, true)
+      }
+    },
+    columnListRequested: () => {
+      return cmdlist.metafilter.list | cmdlist.sort.list | cmdlist.showcols.list | cmdlist.hidecols.list
+    },
+    refine: { // This is a help text only cmdlist property.
+      moniker: '"Refining the First Row"',  // This is a title or caption as handled by cmdlist.showHelp()
+      help: 'The number of rows populating a table depends on selection criteria.  The ' + FLAG + '--table' + RESET + '\n' +
+            'and ' + FLAG + '--report' + RESET + ' options operate only on the first row of a table.  To best use these\n' +
+            'options, you must refine what is displayed as the first row.  The ' + FLAG + '--command' + RESET + '\n' +
+            'option operates on all rows.  When using this option, you must refine the set of\n' +
+            'rows populating the table.\n\n' +
+            
+            'Use ' + FLAG + '--metafilter' + RESET + ' to filter rows based on logical tests of the contents of the\n' +
+            'columns of the table.\n' +
+            'Use ' + FLAG + '--sort' + RESET + ' to arrange rows in an order based on the sequencing of the columns.\n' +
+            'Use ' + FLAG + '--select' + RESET + ' to pick specific rows by a characteristic of the most important one\n' +
+            'or two columns of a table.\n\n' +
+            
+            'Primary selection criteria allow you to further refine the table by specifying\n' +
+            'important attributes of a table, usually starting with in the top level parent\n' +
+            'table.  \n\n' +
+
+            'Use ' + FLAG + '--owner' + RESET + ', which defaults to your user ID, to select spool output from specific\n' +
+            'owner IDs. ' + FLAG + '--usr' + RESET + ' works similarly for submitter user IDs without a default.\n' +
+            'Use ' + FLAG + '--atx' + RESET + ', ' + FLAG + '--job' + RESET + ', ' + FLAG + '--stc' + RESET + ', and ' + FLAG + '--tsu' + RESET + ' to remove spool objects you don\'t wish to view.\n' +
+            'Use ' + FLAG + '--jobname' + RESET + ' to specify a single job name, or a set that begin with a prefix.\n' +
+            'Use ' + FLAG + '--jobclass' + RESET + ' and ' + FLAG + '--sysclass' + RESET + ' to refine by job or sysout class.\n' +
+            'Use ' + FLAG + '--dest' + RESET + ' to refine by the destination of the output.\n'
+    },
+    repeat: {
+      moniker: '"Repeating Options"',
+      help: 'Some options are repeatable options and can be entered multiple times\n' +
+            'on the command line.  When this is done, each repeation affects the\n' +
+            'next child table.  The first instance applies the to top-level parent\n' +
+            "and subsequent instances to each parent's child table.  In the case of\n" +
+            FLAG + '--table' + RESET + ', it specifies the next child table.  This means that if you\n' +
+            'need to specify an option on a child table, you must specify the option\n' +
+            'on its parent.  In some cases this means just specifying the option\n' +
+            'without an argument (' + Underscore + 'but not under Zowe' + NoUnderscore +'), or specifying the option with\n' +
+            'the placeholder argument ' + FLAG + 'off' + RESET + '.  Note while non-repeatable options can be\n' +
+            'specified in any order — and repeatable options can also be specified\n' +
+            'anywhere in the command line — the repeations must be in order\n' +
+            'of parent, child, grandchild, etc.\n' +
+            '\n' +
+            'Example: The child table is data set status under status.  Here we\n' +
+            '         we want to display non-JES sysout in the child table.\n' +
+            '\n' +
+            '  ' + FLAG + 'ejes --table --metafilter off --metafilter ddname ne jes*\n' + RESET +
+            '\n' +
+            'Example: The grandchild table is output descriptors of the above example.\n' +
+            '         Here we want to remove columns from the grandchild table.\n' +
+            '         Note that we inserted ' + FLAG + '--table q' + RESET + ' before the metafilters, but in\n' +
+            '         proper order.  ' + FLAG + '--hidecols' + RESET + ' in not repeatable, so we tacked it at\n' +
+            '         the end, but could have placed it anywhere.  The action would be\n' +
+            '         unchanged. The order of repetion matters, not the placement.\n' +
+            '\n' +
+            '  ' + FLAG + 'ejes --table --table q --metafilter off --metafilter ddname ne jes* --hidecols label field' + RESET
+    },
+    list: { 
+      moniker: '"The \'list\' Argument"',
+      help: 'The argument keyword list causes the CLI to list details about all the\n' +
+            'acceptable arguments for a specified option.  This means that when you\n' +
+            'are using an option and you are unsure of the arguments, you type the\n' +
+            'option followed by list, for example, ' + FLAG + '--select list' + RESET + '.  The CLI will\n' +
+            'output to stdout the valid arguments, in this case for the select option.\n' +
+            'Listing is done for any other work.  The following is valid and only the\n' +
+            'valid arguments before ' + FLAG + '--hidecol' + RESET + ' will be output.\n' +
+            '\n' +
+            FLAG + 'ejes --table --table q --metafilter off --metafilter ddname ne jes* --hidecols ' + ITEM + 'list\n' + RESET +
+            '\n' +
+            'There are two types of option lists.  A static list does not change\n' +
+            'regardless of the context in which it is entered.  An example is the\n' +
+            FLAG + '--owner' + RESET + ' option.  The argument list is always the same whether it is\n' +
+            'entered for the top-parent table for the furthest child table.\n' +
+            '\n' +
+            'A dynamic list is generated by querying the host after the CLI fetches\n' +
+            'data for a specific table.  For example, ' + FLAG + '--table list' + RESET + ' will return a\n' +
+            'different set of available tables for the tables "status" and "sysreq".\n' +
+            'Some tables, like "outdesc", will return that there are no valid\n' +
+            'arguments and advise not to use the option in that context.\n' +
+            '\n' +
+            'The following options have dynamic lists.  All others are static.\n' +
+            FLAG + '   --command    ' +
+            '   --hidecols\n' +
+            '   --metafilter ' +
+            '   --select\n' +
+            '   --showcols   ' +
+            '   --sort\n' +
+            '   --report     ' +
+            '   --table' + RESET
+    },
+    showHelp: (cmd, doNotExit) => { // FUNCTION: Display help for a property in the cmdlist
+      const { readSchemeFile } = require('./EjesLibrary/ansiScheme.js')
+      readSchemeFile('dark')
+      let caption = cmd.long ? (cmd.long + (cmd.short ? ' (SHORT: ' + cmd.short + ')' : '')) : (cmd.moniker ? cmd.moniker : cmdlist.help.value[0])
+      ansiLogOut(HardReset + RESET + INFO + '\n' + 'HELP FOR ' + caption + RESET)
+      ansiLogOut(cmd.help + '\n')
+      cmd.usage && ansiLogOut('USAGE: ' + cmd.usage)
+      ! doNotExit && term.exitNow(0, true)
+    },
+    showUsage: () => { // FUNCTION: Shows the usage for the entire help system list of commands.
+      const { readSchemeFile } = require('./EjesLibrary/ansiScheme.js')
+      readSchemeFile('dark')
+      const usageOf = (list) => list.forEach((item) => { ansiErrOut(cmdlist[item].usage)})
+      ansiErrOut(HardReset + RESET + 
+        'This help applies to "node ejes query".\n' + 
+        '"Zowe ejes query" supports a similar syntax and most of the options:  Zowe option arguments\n' +
+        'that include spaces must be enclosed in double-quotes.  Use --helpApp instead of --help.\n\n' +
+        'Items in ' + DEFAULT + 'this color' + RESET + ' are default options or arguments.\n' +
+        'Items ' + Underscore + 'underscored' + NoUnderscore + ' are replaced by text as indicated.\n\n' +
+        'Use the keyword argument ' + DEFAULT + 'help' + RESET + ' with any option,\n' +
+        'or type ' + DEFAULT + '--help long-option-name' + RESET + ' without dashes,\n' +
+        'for more help.\n\n' +
+        'Use the keyword argument ' + DEFAULT + 'list' + RESET + ' to discover the contextual\n' +
+        'arguments you can use with a specific option.\n' +
+        '\n' +
+        'USAGE:   ejes [' + DEFAULT + 'query' + RESET + ' | q] [' + Underscore + 'table-name' + NoUnderscore + ' | ' + DEFAULT + 'status' + RESET + '] [' + Underscore + 'options...' + NoUnderscore + '|' + DEFAULT + '--owner ' + Underscore + 'your-userid' + NoUnderscore + RESET + ']\n' +
+        '         ejes [emulate | e] [batch | b] [' + Underscore + 'ejes-batch-options*...' + NoUnderscore + RESET + ']\n' +
+        '         ejes profiles** ' + Underscore + 'action' + NoUnderscore + RESET + ' [' + Underscore + 'profile-name' + NoUnderscore + RESET + '] ' + Underscore + 'option...' + NoUnderscore + RESET + '\n' +
+        '         *  Note: Ejes batch options are different from those below.  Use "ejes emulate batch --help" to view usage.\n' + 
+        '         ** Note: Ejes profiles takes positional parameters and different arguments.  Use "ejes profiles --help" to view usage.\n\n' + 
+        'EXAMPLE: ejes activity             Displays the activity table for your user id.\n' +
+        '         ejes query activity       Same.  Query is required for Zowe.\n' +
+        '         ejes                      Displays the status table for your user id.\n' +
+        '         ejes batch                Enter EJES batch mode.\n' +
+        '         ejes emulate batch        Same.  Emulate is required for Zowe.\n' +
+        '\nFundamental options\n')
+      usageOf(['scheme', 'debug', 'dryrun', 'help', 'noColor', 'profile', 'user', 'host', 'password', 'port', 'protocol', 'basepath', 'rejectUnauthorized', 'version'])
+      ansiErrOut('\nFunctional options\n');
+      usageOf(['report', 'syscmd', 'table', 'countOnly'])
+      ansiErrOut('\nCommand options\n\n');
+      usageOf(['command', 'immediate', 'actpurge'])
+      ansiErrOut('\nRepeatable options applicable for each table in the stack.  (Use --help repeat for additional help.)\n');
+      usageOf(['metafilter', 'select', 'sort', 'table', 'dest', 'jobname', 'origin', 'owner', 'jobclass', 'sysclass', 'usr','atx', 'job', 'stc', 'tsu'])
+      ansiErrOut('\nReport options\n');
+      usageOf(['start', 'cc'])
+      ansiErrOut('\nOptions for the output table contents and columns\n');
+      usageOf(['acplex', 'curstep', 'datefmt', 'header', 'hidecols', 'max', 'numchar', 'setup', 'showcols', 'sysname'])
+      ansiErrOut('\nLimiting options\n');
+      usageOf(['lines', 'width'])
+      ansiErrOut('\nPrimary selection filters\n')
+      usageOf(['dest', 'jobname', 'origin', 'owner', 'jobclass', 'sysclass', 'usr','atx', 'job', 'stc', 'tsu'])
+      term.exitNow(0, true)
+    },
+    all: () => {
+
+    },
+    doReparse: (item) => { // FUNCTION: Parse all the captured command line options and arguments.
+      var end = false;
+      var tested = false;
+      var cmd = cmdlist[item]
+      var to = []
+    
+      if ( cmd.reparsed ) // NB: Sometimes reparsing is done out of sequence.  Allow multiple calls, but do it only once.
+        return;
+      cmd.reparsed = true
+
+      if ( ! cmd.long )
+        return; // Only process cmdlist parameter points, not functions, etc.
+    
+      cmd.value.forEach((from, level) => {
+        tested = true
+        let optionSpecifiedWithNoArguments = false;
+        if ( end )
+          return
+        if ( level >= cmd.maxOptionRepeat ) {
+          ansiErrOut(ERROR + 'Option ' + ITEM + cmd.long + ERROR + ' may be specified only once.' + RESET)
+          term.exitNow(24, true)
+        }
+        if ( from.startsWith(OMITTED) ) { // Check node default value.
+          optionCount++
+          from = from.substring(7).trim()
+          if ( from.length == 0)
+            optionSpecifiedWithNoArguments = true;
+          }
+        let which, tokenFound;
+        from.length > 0 && cmd.tokens && cmd.tokens[0] != '' && (tokenFound = cmd.tokens.some((test) => { 
+          which = test
+          return from.toLowerCase() == test.toLowerCase()
+        }))
+
+        if ( from.startsWith('list') ) {
+          if ( cmd.list == undefined ) {
+            ansiErrOut(ERROR + 'The ' + INFO + 'list' + ERROR + ' argument is not supported for ' + INFO + cmd.long + ERROR + '.' + RESET)
+            cmdlist.showHelp(cmd) // Doesn't return
+            term.exitNow(26, true)
+          }
+          if ( cmd.doList && typeof cmd.doList == 'function' ) {
+            cmd.value = [ from ]
+            cmd.doList(item)
+            term.exitNow(0, true)
+          }
+          cmd.list = true;
+          return end = true;
+        }
+        else if ( from.startsWith('help') ) 
+          cmdlist.showHelp(cmd) // Doesn't return
+        else if ( from.length == 0 || tokenFound ) {  // If omitted argument or the argument is a provided token.
+          if ( ! tokenFound && cmd.defaultValue && cmd.defaultValue.length == 0 ) { // If there is NO DEFAULT VALUE, that is it is defined as '', one is required.
+            if ( cmd.long ) {  // If it is an option, complain and exit.  Otherwise just ignore.
+              ansiErrOut(ERROR + 'Option ' + ITEM + cmd.long + ERROR + ' should not be coded using default syntax.  Omit the option, or specify an argument instead.' + RESET)
+              cmd.doList && cmd.doList(item)
+              ! cmd.doList && cmdlist.showHelp(cmd)
+              term.exitNow(25, true)
+            }
+            return end = true  // Eat defective default value coding by user.
+          }
+          if ( ! tokenFound  )
+            from = cmd.defaultValue
+        }
+        else if ( cmd.tokens && cmd.tokens.length > 0 ) { // Tokens were expected.  A value was coded but it isn't a token.
+          debug & d_ProfileDump && ansiErrOut('Warning: ' + from + ' is not in the token set for ' + cmd.long)
+          debug & d_ProfileDump && ansiErrOut(util.inspect(cmd.tokens, false, 10, true))
+        }
+
+        from = from || ''
+        var argumentCount = from.split(' ').length
+        if ( argumentCount < cmd.minArgumentCount || argumentCount > cmd.maxArgumentCount )
+          if ( ! optionSpecifiedWithNoArguments ) {
+            var range = cmd.minArgumentCount == cmd.maxArgumentCount ? (' is allowed ' + ITEM + cmd.maxArgumentCount + ERROR + ' argument' + (cmd.maxArgumentCount? '' : 's')) : (' can have between ' + ITEM + cmd.minArgumentCount + ERROR + ' and ' + ITEM + cmd.maxArgumentCount + ERROR + ' arguments')
+            ansiErrOut(ERROR + 'Option ' + ITEM + cmd.long + ERROR + range + ' but has ' + ITEM + argumentCount + ERROR + '.' + RESET)
+            ansiErrOut(ITEM + util.inspect(from, false, 1, true) + RESET)
+            cmd.doList && cmd.doList(cmd.long.substring(2))
+            term.exitNow(27)
+          }
+        to.push(from)
+      })
+
+      if ( queuedConfirmations && (optionCount > 1 || (tested && item != 'confirm')))
+        if ( tested && item != 'use' && item != 'confirm' )
+          deleteConfirmations()
+      cmd.value = to
+    
+      tested && cmd.after && cmd.after(cmd)
+      ! tested && cmd.anyway && cmd.anyway(cmd)
+      debug & d_ProfileDump && ansiLogOut('Result for ' + cmd.long + ' is ' + util.inspect(cmd.value, false, 10, true))
+    },
+    reparse: () => {
+      const keys = Object.entries(cmdlist)
+      for (const key of keys )
+        cmdlist.doReparse(key[0])
+    }
+  } // end of cmdList const
+
+  /* delete command confirmations */
+
+  function deleteConfirmations(silent) {
+    if ( fs.existsSync(os.homedir() + '/.ejes/work/confirm') ) {
+      fs.unlink(os.homedir() + '/.ejes/work/confirm', (err) => {
+      })
+      ! silent && ansiErrOut(HILITE + 'Queued commands have been canceled.' + RESET)
+      queuedConfirmations = false
+    }
+  }
+
+  /* logoff() callback customization for common.term object */
+
+  term.logoffPreamble = outputReportObj
+  term.logoffOrTerminate = function(param) { return cmdlist.command.value.length > 0 && ! (param && parm.force) }
+  term.logoffTerminate = function() { return debug & d_LogoffCancelEndOfData && ansiErrOut(DEBUG + "Command pending, logoff deferred." + RESET) }
+  term.logoffIsDownload = function() { return isDownload }
+  term.logoffRequestEnd = writeJsonResponse 
+
+  /* metered line output */
+
+  function warnTruncatedLine() {
+    if ( truncatedLine && ! truncatedLineFlagged ) {
+      ansiErrOut(INFO + 'Lines truncated at column ' + ITEM + cmdlist.width.valueReport + INFO + '.  Increase --width, use --showcols for tables, or\nwiden terminal window to prevent.  Redirected output is not truncated.' + RESET)
+      truncatedLineFlagged = true;
+    }
+  }
+  
+  /* outputReportObj - JSON captured for --rfj mode and concatenated is output here. */
+
+  var reportObj
+  function outputReportObj() {
+    if ( reportObj ) {
+      if ( isResponseFormatJson() || cmdlist.jsonoutput.value[0] ) {
+        if ( isResponseFormatJson() )
+          setObj(reportObj)
+        else
+          ansiLogOut(JSON.stringify(reportObj, null, 2))
+      }
+      reportObj = undefined
+    }
+  }
+
+  /* line out - meter lines output to prevent runaway output. */
+
+  function lineOut(line, arrow = false, makeObj = undefined) {
+    let chars, extra, l, trunc = true;
+    if ( lineOutCount == cmdlist.lines.maxLines ) {
+      ansiErrOut(INFO + 'Output truncated to max line count of ' + ITEM + cmdlist.lines.maxLines + INFO + '. Set --lines to a larger amount or ' + ITEM + 'all' + INFO + ' to prevent.' + RESET)
+      warnTruncatedLine()
+      lineOutCount++
+      if ( reportObj )
+        reportObj.errorMessage = 'Output truncated to max line count of ' + cmdlist.lines.maxLines + '. Set --lines to a larger amount or \'all\' to prevent.'
+      term.logoff()
+      return false
+    }
+    if ( lineOutCount > cmdlist.lines.maxLines )
+      return;
+    lineOutCount++
+    if ( makeObj && (isResponseFormatJson() || cmdlist.jsonoutput.value[0]) ) {
+      if ( ! reportObj ) {
+        reportObj = {}
+        reportObj[makeObj] = []
+      }
+      if ( reportObj ) {
+        reportObj[makeObj].push({ line: line.replace(/\r/g, '') })
+      }
+      return true;
+    }
+    if ( line ) {
+      RegExp.escape = function(string) {
+        return string.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')
+      };
+      HILITE.length > 0 && (line = line.replace(new RegExp(RegExp.escape(HILITE), 'g'), '\x01'))
+      RESET.length > 0 && (line = line.replace(new RegExp(RegExp.escape(RESET), 'g'), '\x02'))
+      l = line.length 
+      if ( l > 0 ) {
+        lineWidth = (func == table) ? cmdlist.width.valueTable : cmdlist.width.valueReport
+        chars = Math.min(lineWidth, l)
+        truncatedLine = (trunc = l > chars) || truncatedLine
+        chars = (arrow && trunc) ? chars-- : chars
+        chars += (line.match(/\x01/g) || []).length + (line.match(/\x02/g) || []).length 
+        extra = arrow ? (trunc ? '>' : '') : ''
+        line = line.substr(0, chars)
+        line = line.replace(/\x01/g, HILITE)
+        line = line.replace(/\x02/g, RESET)
+        ansiLogOut(line + extra + (process.stdout.isTTY ? RESET : ''))
+      }
+    }
+    else
+      ansiLogOut()
+    return true
+  }
+
+  /* makeRequest - response to request is downloaded data */
+
+  function makeRequest(options, callback) {
+    var request = debugRequest()
+    https.request(options, (res) => {
+      debugResponse(request, res)
+      if ( term.terminated )
+        return;
+      var data = ''
+      options.path = ejes.basePath + '/exec'
+      if ( ! options.headers.Cookie ) {
+        if ( ! res.headers['set-cookie'] ) {
+          ansiErrOut(ERROR + 'Logon failed with status ' + ITEM + res.statusCode + ERROR + '.  No cookie received.  Cannot continue.' + RESET)
+          if ( options.headers.Authorization ) 
+            options.headers.Authorization = '<not shown>' // Can do because quitting now.
+          res.statusCode == 405 && (ansiErrOut(HILITE + 'Status 405 - Method Not Allowed\n' + MSG + 'Status code indicates that the request method is known by the server but is not supported by the target resource.\n' + ITEM + 'Is a zowe gateway failing to resolve the host address?  Is the wrong resource at the configured address?' + RESET))
+          ansiErrOut('Options: ')
+          ansiErrOut(util.inspect(options, true, 10, true)  + RESET)
+          ansiErrOut('Response Headers: ')
+          ansiErrOut(util.inspect(res.headers, true, 10, true)  + RESET)
+          return term.exitNow(res.statusCode == 405 ? 405 : 46)
+        }
+        options.headers.Cookie = cookie = res.headers['set-cookie'][0]
+        delete options.headers.Authorization
+        delete options.post.initParms
+      }
+      var txt = false, pdf = false, file
+      if ( res.headers && res.headers["content-disposition"] && (cmdlist.pdf.value[0] || cmdlist.text.value[0])) {
+        var x = res.headers["content-disposition"].match(/^.*filename="(.+\.(pdf|txt))"$/, i)
+        txt = x && x[2] && x[2] == 'txt'
+        pdf = x && x[2] && x[2] == 'pdf'
+        x && x[1] && (file = x[1])
+        if ( cmdlist.pdf.value[0] && cmdlist.pdf.value[0] != '?' )
+          file = cmdlist.pdf.value[0]
+        else if ( cmdlist.text.value[0] && cmdlist.text.value[0] != '?' )
+          file = cmdlist.text.value[0]
+        let downloadPath = process.env.EJES_DOWNLOAD_PATH && process.env.EJES_DOWNLOAD_PATH.length > 0 ? process.env.EJES_DOWNLOAD_PATH : '' 
+        if ( ! /^(?:[\w]:|\\|\/).*$/.test(file) )
+          file = downloadPath + file
+        try {
+          if ( fs.existsSync(file) ) {
+            fs.unlinkSync(file)
+            ansiErrOut(INFO + 'Download to file ' + ITEM + file + INFO + ' requested.  File being replaced.' + RESET)
+          }
+          else
+            ansiErrOut(INFO + 'Download to file ' + ITEM + file + INFO + ' requested.' + RESET)
+        }
+        catch(e) {
+          ansiErrOut(e.message || e)
+          return term.exitNow(37)
+        }
+      }
+      if ( isDownload ) {
+        res.on('data', (chunk) => { 
+          if ( res.headers['content-type'].indexOf('json') > 0 ) { // Shouldn't get JSON unless an error occurred.
+            let json = JSONparse(chunk, 'makeRequest')
+            if ( json.status > 200 )
+              setExitCode(json.status)  // NB: The JSON error will output below.
+            ansiErrOut(ERROR + 'ERROR: ' + INFO + ' Status: ' + HILITE + json.status +  INFO + ', Message: ' + HILITE + json.statusMessage +  INFO + ', Error: ' + ERROR + json.errorMessage + INFO + '.' + RESET)
+            if ( json.status == 400 ) {
+              ansiErrOut(INFO + 'This report is not browsed content and does not support either ' + ITEM + '--text' + INFO + ' or ' + ITEM + '--pdf' + INFO + '.' + RESET) 
+            }
+            term.logoff()
+          }
+          if ( ! term.terminated ) { 
+            if ( pdf ) {
+              try {
+                fs.appendFileSync(file, chunk)
+              }
+              catch(e) {
+                ansiLogOut(e.message || e)
+                return term.exitNow(37)
+              }
+            }
+            else {
+              let EOB = chunk.lastIndexOf('\n')
+              let lines = (data + chunk.toString().substring(0, EOB)).split('\n')
+              lines.forEach((line) => { 
+                if ( txt )
+                  try {
+                    fs.appendFileSync(file, line)
+                  }
+                  catch(e) {
+                    ansiErrOut(e.message || e)
+                    return term.exitNow(37)
+                  }
+              else
+                lineOut(line, false, 'report') 
+              })
+              if ( EOB + 1 != chunk.length )
+                data = chunk.toString().substring(EOB + 1)
+              else
+                data = ''
+            }
+          } 
+        })
+      }
+      else
+        res.on('data', (chunk) => { 
+          if ( ! term.terminated ) 
+            data += chunk 
+        })
+      res.on('end', () => {
+        if ( ! term.terminated) {
+          if ( ! isDownload ) {
+            if ( debug & d_JSONResponseInspector )
+              ansiErrOut(DEBUG + 'Response #' + options.request + '\n' + RESET + util.inspect(JSONparse(data, 'makeRequest'), true, 10, true))  
+            if ( 1 || isResponseFormatJson () ) {
+              let obj = (JSONparse(data, 'makeRequest-obj')).rows
+              obj && obj.length && (reportObj = obj)
+            }
+          callback(res, data)  
+          }
+          else {
+            if ( data.length > 0 ) {
+              if ( pdf ) {
+                try {
+                  fs.appendFileSync(file, chunk)
+                  download.chunks++
+                }
+                catch(e) {
+                  ansiErrOut(e.message || e)
+                  return term.exitNow(37)
+                }
+              }
+              else {  
+                let lines = data.split('\n')
+                lines.forEach((line) => { 
+                  if ( txt )
+                    try {
+                      fs.appendFileSync(file, line)
+                    }
+                    catch(e) {
+                      ansiErrOut(e.message || e)
+                      return term.exitNow(37)
+                    }
+                  else
+                    lineOut(line, false, 'report') 
+                })
+              }
+            }
+            ansiErrOut(HILITE + 'Dowmload completed.  ' + (MSG + 'Output sent to ' + (file ? ITEM + file : process.stdout.isTTY ? 'stdout' : 'redirected stdout') + MSG + '.') + RESET)
+            isDownload = false
+            term.logoff()
+            warnTruncatedLine()
+          }
+        } 
+      })
+    })
+    .on('error', (e) => {term.requestError(e)})
+    .end(JSON.stringify(options.post))
+  }
+
+  /* list columns */
+
+  function listColumns(json) {
+    if ( ! cmdlist.columnListRequested() )
+      return false
+    if ( json.columns ) {
+      var maxTitleLength = 10;
+      var maxNameLength = 10
+      if ( json.columns.length == 0 )
+        ansiErrOut(ERROR + 'To list columns for ' + ITEM + json.function.functionName + ERROR + ', your selection criteria must display at least one row in that table.' + RESET)
+      else {
+        json.columns[0].forEach((col, i, cols) => {
+          maxTitleLength = Math.max(maxTitleLength, col.columnTitle.length + (col.titleSubscript != 0 ? 3 : 0))
+          maxNameLength = Math.max(maxNameLength, col.columnName.length)
+        })
+        ansiLogOut(('Column-key' + ' '.repeat(maxTitleLength)).substring(0, maxTitleLength + 1) 
+          + ('Native-key' + ' '.repeat(maxNameLength)).substring(0, maxNameLength + 1) + ' (' + json.function.functionName + ')' )
+        ansiLogOut('-'.repeat(maxTitleLength) + ' ' + '-'.repeat(maxNameLength) + ' ')
+        json.columns[0].forEach((col, i, cols) => {
+          ansiLogOut((col.columnTitle + (col.titleSubscript == 0 ? '' : ('(' + col.titleSubscript + ')')) + ' '.repeat(maxTitleLength)).substring(0, maxTitleLength + 1) 
+          + (col.columnName + ' '.repeat(maxNameLength)).substring(0, maxNameLength + 1) )
+        })
+        ansiLogOut(INFO + 'If a Column-key has a subscript, use a Native-key for ease of typing.' + RESET)
+        ansiLogOut(INFO + 'Names are case-insensitive and column-keys may be unambiguously abbreviated,' + RESET)
+        ansiLogOut(INFO + 'however, Column-keys are matched before Native-keys.' + RESET)
+      }
+    }
+    term.logoff()
+    return true
+  }
+
+  /* list error detection - returns true if a host error. */
+
+  function listError(json, errorsOnly) {
+    if ( json.message && json.message.longMessages && json.message.longMessages.length > 0 ) {
+      if ( ! errorsOnly || json.message.isErrorMessage )
+        ansiErrOut((json.message.isErrorMessage ? ERROR : MSG) + json.message.longMessages[0] + RESET)
+      term.setAdditiveExitCode(json)
+      return json.message.isErrorMessage
+    }
+    return false
+  }
+
+  /* send tabular to stdout */
+
+  function sendTabular(json) {
+    if ( json.rows && json.rows.length > 0 ) {
+      if ( arrangement.length < 1 ) {
+        if ( cmdlist.showcols.value.length > 0 )
+          cmdlist.showcols.value[0].split(' ').forEach((name) => {
+            var test;
+            var index = json.rows[0].columns.findIndex((col) => {
+              return col.columnName.toLowerCase().startsWith(test = name.toLowerCase()) || col.columnTitle.toLowerCase().startsWith(test)
+            })
+            index >= 0 && arrangement.push(index)
+          })
+        else
+          for (let i = 0 ; i < json.rows[0].columns.length ; i++ )
+            arrangement.push(i)
+      }
+      var keyWidth = 0;
+      var maxcomp
+      var result
+      var status
+      var countOnly = cmdlist.countOnly.value.length > 0
+      if ( json.keys ) {
+        json.keys.forEach((key) => {
+          debug & d_DisplayRowkeys && (keyWidth = Math.max(keyWidth, key.length))
+        })
+        countOnly = false  // Rowkeys conflict with this option, so turn it off.
+      }
+      if ( countOnly ) {
+        term.logoff()
+        return
+      }
+
+      //if ( process.stdout.isTTY )
+        arrangement.forEach((index, j) => {
+          var col = json.rows[0].columns[index]
+          if (col.columnTitle == "MaxComp" )
+            maxcomp = j
+          if ( col.columnTitle == 'Status' )
+            status = j
+          if ( col.columnTitle == 'Result' )
+            result = j
+        })
+
+      json.rows.forEach((row, i) => {
+        if ( i == 0 && lineOutCount == 0 && cmdlist.header.value != 'off' ) {
+          var headerLine = ''
+          var dashLine = ''
+          if ( keyWidth > 0 ) {
+            headerLine = 'Row Key' + ' '.repeat(keyWidth - 6)
+            dashLine = '-'.repeat(keyWidth) + ' '
+          }
+          arrangement.forEach((index, j) => {
+            var col = row.columns[index]
+            if ( col.columnWidth == 0 )
+              return
+            headerLine += ((col.titleSubscript == 0 ? col.columnTitle : col.columnName) + ' '.repeat((col.columnWidth + 1))).substring(0, col.columnWidth + 1)
+            dashLine += '-'.repeat(col.columnWidth) + ' '
+          })
+          lineOut(RESET + headerLine) //  RESET is for redirected output that is --nc off.
+          lineOut(dashLine, true)
+        }
+        var data = ''
+        var prompt = ''
+        if ( keyWidth )
+          data = (process.stdout.isTTY ? HILITE : '') + json.keys[i] + ' '.repeat((keyWidth + 1) - json.keys[i].length) + (process.stdout.isTTY ? RESET : '')
+        arrangement.forEach((index, j) => {
+          var col = row.columns[index]
+          var on = false
+          if ( col.columnWidth == 0 )
+            return
+          maxcomp == j && (on = col.columnText != 'CC 0000')
+          status == j && (on = col.columnText.indexOf('EXCEPTION') >= 0)
+          result == j && col.dataType == 'binary' && col.columnText.length > 0 && (on = (0 + col.columnText) > 0)
+          var datum = ''
+          on && (datum += HILITE)
+          datum += (col.columnText + ' '.repeat((col.columnWidth + 1))).substring(0, col.columnWidth + 1)
+          on && (datum += RESET)
+          data += datum;
+          json.keys && j < 4 && (prompt += datum)
+        })
+        if ( i == 0 && lineOutCount == 0 && cmdlist.header.value == 'off' )
+          data = RESET + data //  RESET is for redirected output that is --nc off.
+        if ( lineOut(data) && json.keys ) { 
+          rowKeys.push(json.keys[i])
+          keyPrompts.push(prompt)
+        }
+
+      })
+    }
+    else {
+      debug & d_LogoffCancelEndOfData && ansiErrOut(DEBUG + "No more lines?" + RESET)
+      warnTruncatedLine()
+      term.logoff()  // NB: If commands are pending, logoff will be deferred.
+      return true
+    }
+    debug & d_LogoffCancelEndOfData && ansiErrOut(DEBUG + "More lines?" + RESET)
+    return false
+  }
+
+  /* Send Command Request */
+
+  function sendCommandRequest(options, locate, cmd, callback) {
+    debug & d_HostCmds && locate.length > 0 && ansiErrOut(INFO + 'locate key=' + ITEM + locate + RESET)
+    debug & d_HostCmds && locate.length == 0 && ansiErrOut(INFO + cmd + RESET)
+    options.path += options.query = '?q=message'
+    options.post.execParms.enumValue = 0
+    options.post.execParms.command = locate.length > 0 ? locate : cmd
+    var request = debugRequest()
+    https.request(options, (res) => {
+      debugResponse(request, res)
+      if ( term.terminated )
+        return
+      var data = ''
+      res.on('data', (chunk) => { data += chunk })
+      res.on('end', () => { 
+        options.path = ejes.basePath + '/exec'
+        if ( ! term.terminated ) {
+          var json = JSONparse(data, 'sendCommandRequest');
+          if ( debug & d_JSONResponseInspector )
+            ansiErrOut(DEBUG + 'Response #' + options.request + '\n' + RESET + util.inspect(JSONparse(data, 'sendCommandRequest-response'), true, 10, true))   
+          if ( listError(json) ) {
+            if ( locate.length > 0 ) {
+              ansiErrOut(INFO + "Command failed.  Skipping  Req status: " + ITEM + json.statusMessage + INFO + ", Elapsed: " + ITEM + json.elapsed + INFO + ", Return code: " + ITEM + json.returnCode + RESET )
+              callback()
+              return
+            }
+          }
+          if ( locate.length > 0 ) {
+            sendCommandRequest(options, '', cmd, callback)
+            ansiErrOut(INFO + "Locate successful.  Req status: " + ITEM + json.statusMessage + INFO + ", Elapsed: " + ITEM + json.elapsed + INFO + ", Return code: " + ITEM + json.returnCode + RESET )
+            return
+          }
+          ansiErrOut(INFO + "Command issued.  Req status: " + ITEM + json.statusMessage + INFO + ", Elapsed: " + ITEM + json.elapsed + INFO + ", Return code: " + ITEM + json.returnCode + RESET )
+          needUlog = true
+          callback()
+        }
+      })
+    })
+    .on('error', (e) => {term.requestError(e)})
+    .end(JSON.stringify(options.post))
+  }
+
+  /* Display ULOG if necessary, then logoff. */
+
+  function runUlog(addCommand) {
+    readline.createInterface({ input: process.stdin }).close()
+    lineOutCount = 0;
+    truncatedLine = false;
+    truncatedLineFlagged = false;
+    func = runUlog
+    cmdlist.command.value = []
+
+    if ( needUlog || addCommand ) {
+      options.query = '?q=message,userLog'
+      options.path = ejes.basePath + '/exec'
+      options.path += options.query
+      options.post.execParms.enumValue = 200
+      options.post.execParms.command = (addCommand ? addCommand : '') + 'update;ulog' // '/d t';
+      setTimeout(() => { makeRequest(options, ulog)}, 1000)
+    } 
+    else {
+      ansiErrOut('0 lines returned in user log.')
+      process.exitCode = 40
+      term.logoff()
+    }
+  }
+
+  /* keypress handler - used for commands that are not immediate or confirmed. */
+
+  function keypressHandler(str, keyPress) {
+    response = ''
+    if (keyPress.ctrl && keyPress.name === 'c') {
+      ansiLogOut('\nINTERRUPT')
+      captureKeystrokes = false
+      cmdlist.command.value = []
+      quit = true
+      runUlog()
+    } 
+    else if ( captureKeystrokes ) {
+      response = keyPress.sequence
+      prompter()
+    } 
+  }
+
+  /* Prompt user for confirmations */
+
+  function prompter() {
+    var cmd, locate;
+    if ( quit ) {
+      return;
+    }
+    if ( ! captureKeystrokes ) {
+      if ( promptCount >= keyPrompts.length ) {
+        runUlog()
+        return
+      }
+      process.stdout.write(INFO + 'Run command "' + ITEM + cmdlist.command.value[0] + INFO + '" on: ' + RESET + keyPrompts[promptCount] + yesNoAllCancel);
+      if ( allResponse )
+        response = 'a'
+      else if ( noneResponse )
+        response = 'c'
+      else {
+        reponse = ''
+        captureKeystrokes = true;
+        return
+      }
+    }
+    captureKeystrokes = false;
+    switch (response.toLowerCase()) {
+      default:
+        if ( response.length > 0 )
+          ansiLogOut(response + ERROR + ' <= Unrecognized response.\u0007' + RESET)
+        prompter()
+        return
+      case 'c':
+        ansiLogOut('Canceled')
+        promptCount++
+        noneResponse = true
+        prompter()
+        return
+      case 'n':
+        ansiLogOut('No')
+        promptCount++
+        prompter()
+        return
+      case 'a':
+        ansiLogOut('All')
+        allResponse = true;
+        break
+      case 'y':
+        ansiLogOut('Yes')
+        break
+    }
+    locate = crDelay ? 'crdelay 0;' : ''
+    crDelay = false;
+    locate += 'loc key=' + rowKeys[promptCount];
+    cmd = ':' + cmdlist.command.value[0]
+    promptCount++;
+    sendCommandRequest(options, locate, cmd, prompter)
+  }
+
+  function runQueuedCommands() {
+    var cmd, locate;
+    if ( promptCount >= keyPrompts.length ) {
+      runUlog()
+      return
+    }
+    locate = crDelay ? 'crdelay 0;' : ''
+    crDelay = false;
+    locate += 'loc key=' + rowKeys[promptCount];
+    cmd = ':' + cmdlist.command.value[0]
+    ansiLogOut(keyPrompts[promptCount++])
+    sendCommandRequest(options, locate, cmd, runQueuedCommands)
+  }
+
+  /* table */
+
+  function table(res, data) {
+    if ( res.headers['content-type'].indexOf('json') > 0 ) {
+      var json = JSONparse(data, 'table');
+      if ( json.position )
+        if ( listError(json) )
+          return
+        else if ( listColumns(json) )
+          return
+        else if ( listTables(json) )
+          return
+        else if ( listReports(json) )
+          return
+        else if ( listCommands(json) )
+          return;
+        else if ( listSelections(json) )
+          return;
+        else if ( json.position.numberOfLines == 0 ) {
+          ansiErrOut('0 lines returned by selection criteria.')
+          process.exitCode = 42
+        }
+        else if ( confirmations == true ) {
+          ansiLogOut(HILITE + 'Running queued commands...' + RESET)
+          runQueuedCommands()
+          return
+        }
+        else if ( sendTabular(json) ) {
+          debug & d_LogoffCancelEndOfData && ansiErrOut(DEBUG + "No more lines in table()" + RESET)
+          cmdlist.lines.maxLines = 99999  // Allow lines to output for ULOG, etc.
+
+          if ( cmdlist.dryrun.value.length > 0 || parcelOut ) {
+            noneResponse = true
+          }
+          else if ( cmdlist.confirm.value[0] ) {
+            let confirm = { "cmdlist": capturedCmdlist, "rowKeys": rowKeys, "keyPrompts": keyPrompts }
+            let data = new Uint8Array(Buffer.from(JSON.stringify(confirm, null, 2)))
+            fs.writeFile(os.homedir() + '/.ejes/work/confirm', data, (err) => {
+              if (err) 
+                throw err;
+            })
+            ansiErrOut(HILITE + 'Run the CLI with just ' + FLAG + '--confirm' + HILITE + ' to run the queued commands.  Any other invocation cancels the queue.' + RESET)
+            process.exitCode = 35;
+            return
+          }
+          else if ( cmdlist.immediate.value.length > 0 && cmdlist.immediate.value == 'slow' )  {
+            allResponse = true
+          }
+          else if ( cmdlist.command.value.length > 0 && rowKeys.length && cmdlist.immediate.value == 'fast' ) {
+              var cmd = 'crdelay 0;1-' + rowKeys.length + ' ' + cmdlist.command.value + ';'
+              if ( debug & d_HostCmds )
+                ansiErrOut(INFO + cmd + RESET)
+              runUlog(cmd)
+              return
+          }
+
+          if (keyPrompts.length > 0 && cmdlist.command.value.length > 0 && rowKeys.length && process.stdout.isTTY ) {
+            /* Install keypress handling on stdin */
+
+            readline.emitKeypressEvents(process.stdin);
+            process.stdin.setRawMode(true)
+            process.stdin.on('keypress', keypressHandler)
+
+            prompter() // Start the process.
+          }
+          else
+            term.logoff({force: true})  
+          return  // No more lines
+        }
+        else { // Fetch more lines
+          debug & d_LogoffCancelEndOfData && ansiErrOut(DEBUG + "Fetching more lines in table()" + RESET)
+          options.path += options.query
+          makeRequest(options, func)
+          return   
+      }
+    }
+    report(res, data)
+  }
+
+  /* report */
+
+  function report(res, data) {
+    if (res.headers['content-type'] == 'text/plain') {
+      ansiLogOut(data);
+      term.logoff()
+      return
+    }
+    var json = JSONparse(data, 'report')
+    if ( listError(json) ) {
+      term.logoff()
+      return
+    } 
+    if ( json.lines ) {
+      json.lines.forEach((line) => { lineOut(line) })
+    }
+    if ( ! (json.returnCode < 4) ) {
+      listError(json)
+      term.logoff()
+      return
+    }
+    delete options.post.platformEncoding
+    options.post.execParms.enumValue = enumvalue
+    options.post.execParms.command = ""
+    makeRequest(options, report)
+  }
+
+  function listJobs(reportJson) {
+    function listJobsUsing(out) {
+      if ( reportJson && reportJson.submittedJobs ) 
+        if ( reportJson.submittedJobs.length > 0 ) {
+          let j = reportJson.submittedJobs.length, sp = '  '
+          out(ITEM + 'Order'.padEnd(7, ' ') + 'Job Name'.padEnd(10, ' ') + 'Job Id'.padEnd(10, '  ') + 'Format'.padEnd(10, ' ') + 'Length'.padEnd(8, ' ') + 'Subsystem'.padEnd(11, ' ') + 'Submission Time' + RESET)
+          out(DEFAULT + '-----'.padEnd(7, ' ') + '--------'.padEnd(10, ' ') + '--------'.padEnd(10, '  ') + '--------'.padEnd(10, ' ') + '------'.padEnd(8, ' ') + '---------'.padEnd(11, ' ') + '----------------' + RESET)
+          reportJson.submittedJobs.slice().reverse().forEach((job) => {
+            out((j--).toString().padStart(5, ' ') + RESET + sp + job.jobName.padEnd(10, ' ') + job.jobId.padEnd(10, ' ') + job.recordFormat.padEnd(10, ' ') + DEFAULT + job.recordLength.toString().padStart(6, ' ') + sp + RESET + job.subsystem.padEnd(11, ' ') + INFO + (new Date(job.timeStamp) + RESET))
+          })  
+        }
+        else
+          out('No jobs recorded.')
+    }
+    if ( process.stdout.isTTY )
+      listJobsUsing(ansiLogOut)
+    else { 
+      let was = getOutStrip()
+      setOutStrip(true)
+      listJobsUsing(ansiLogOut)
+      setOutStrip(was)
+    }
+  }
+
+  /* submit - report job submit response */
+
+  function submit(res, data) {
+    if (res.headers['content-type'] == 'text/plain') {
+      ansiLogOut(data);
+      term.logoff()
+      return
+    }
+    var json = JSONparse(data, 'version')
+    if ( json.message && json.message.longMessages)
+      json.message.longMessages.forEach((msg) => {
+        ansiErrOut(MSG + msg + RESET)
+      })
+    listJobs(json)
+    term.logoff()
+  }
+
+  /* version */
+
+  function version(res, data) {
+    if (res.headers['content-type'] == 'text/plain') {
+      ansiLogOut(data);
+      term.logoff()
+      return
+    }
+    var json = JSONparse(data, 'version')
+    if ( json.message && json.message.longMessages)
+      json.message.longMessages.forEach((msg) => {
+        ansiErrOut(MSG + msg + RESET)
+      })
+    term.logoff()
+  }
+
+  /* ulog */
+
+  function ulog(res, data) {
+    if (res.headers['content-type'] == 'text/plain') {
+      ansiLogOut(data);
+      term.logoff()
+      return
+    }
+    if ( debug & d_JSONResponseInspector )
+      ansiErrOut(DEBUG + 'Response #' + options.request + '\n' + RESET + util.inspect(JSONparse(data, 'ulog-response'), true, 10, true))   
+    var json = JSONparse(data, 'ulog')
+    if ( listError(json) ) {
+      term.logoff()
+      return
+    } 
+    if ( json.userLog )
+      if ( ! json.userLog.logLines || json.userLog.logLines.length == 0 ) {
+        if ( lineOutCount == 0 ) 
+          ansiLogOut('Zero lines returns in user log.')
+      }
+      else
+        json.userLog.logLines.forEach((line, i, lines) => { lineOut(line.text, false, 'ulog') })
+    if ( ! (json.returnCode < 4) || term.terminated ) {
+      term.logoff()
+      warnTruncatedLine()
+      return
+    }
+    delete options.post.platformEncoding
+    options.post.execParms.enumValue = enumvalue
+    options.post.execParms.command = ""
+    makeRequest(options, ulog)
+  }
+
+  /* parse out query auth display return values */
+
+  function parseQueryAuthDisplay(data) {
+    var json = JSONparse(data, 'parseQueryAuthDisplay', 47, 'This error occurred while trying to check authorized tables.')
+    if ( ! json.message || json.status != 200 ) {
+      ansiErrOut(ERROR + 'Error trying to check authorized tables.  Likely bad credentials.' + RESET)
+      ansiErrOut(util.inspect(json, true, 10, true))
+      term.exitNow(33, true)  // Strands session; too deep in async handler, so hard exit.
+    }
+    if ( json.message.longMessages.length > 0 ) {
+      json.message.longMessages.forEach((list) => {
+        var result = list.match(/\w+/g)
+        var type = result.shift().toLowerCase();
+        result.forEach((item) => {
+          if ( ! /DUMP|LOG|ULOG/.test(item) )
+            authList.push({ panel: item.toLowerCase(), type: type })
+        })
+      })
+    }  
+    if ( authList.length != 0 && ! authList.some((display) => { 
+      if ( display.panel == 'status' ) {
+        defaultUse = display.panel
+        return true
+      } 
+    } )) {
+    if ( defaultUse.length == 0 && ! authList.some((display) => {
+      if ( display.panel != 'activity' && display.panel != 'pstatus' ) {
+        defaultUse = display.panel
+        return true
+      }
+    }) )
+      defaultUse.length == 0 && (defaultUse = authList[0].panel)
+    }
+    if ( defaultUse.length == 0 ) {
+      ansiErrOut(ERROR + 'You are not authorized to use any primary display tables.  No useful work can be performed.' + RESET)
+      term.exitNow(28, false)  // Strands session; see above.
+    }
+  }
+
+  /* Display authorized display operator can use.  */
+
+  function listUse(res, data) {
+    parseQueryAuthDisplay(data)
+      if ( cmdlist.dryrun.value =='syntax' ) 
+        ansiErrOut(INFO + 'Dry-run ' + ITEM + Underscore + 'check' + NoUnderscore + INFO + ' complete.' + RESET)
+      else {
+      ansiLogOut('Authorized Table  Type      Default')
+      ansiLogOut('----------------  --------- -------')
+      authList.forEach((item, i) => {
+        ansiLogOut(((( item.panel == defaultUse ) ? item.panel.toUpperCase() : item.panel) + ' '.repeat(18)).substring(0, 18) + (item.type + ' '.repeat(10)).substring(0, 10) + (( item.panel == defaultUse ) ? 'yes' : 'no'))
+      })
+    }
+    term.logoff()
+  }
+
+  /* list subsets of line commands (tables, reports, commands) */
+
+  function listFromLineCommands(json, cmdType) {
+    var count = 0;
+    ansiLogOut((cmdType == 'browser' ? 'Browser' : cmdType == 'table' ? 'Table  ' : 'Command') + '  Description              Default' + (json.function ? '  (' + json.function.functionName + ')' : ''))
+    ansiLogOut('-------  -----------              -------')
+  if ( json.lineCommands && json.lineCommands.length > 0 ) {
+      json.lineCommands.forEach((list, i, msgs) => {
+        if ( list.type != (cmdType == 'browser' ? 'browser' : cmdType == 'table' ? 'tabular' : 'systemcommand' ) )
+          return
+        var item = list.command
+        var description = list.description.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([A-Z])([A-Z][a-z])/g, '$1 $2').replace(/([1-9])([A-Z][a-z])/g, '$1 $2')
+        if ( description.indexOf('Pattern') >= 0 )
+          return
+        var check = cmdType == 'browser' ? 'B' : cmdType == 'table' ? 'S' : ''
+        ansiLogOut(((( item == check ) ? item : item.toLowerCase()) + ' '.repeat(9)).substring(0, 9) + (description + ' '.repeat(25)).substring(0, 25) + (( item == check ) ? 'yes' : 'no'))
+        count++
+      })
+    }
+    if ( count == 0 ) {
+      ansiErrOut(INFO + 'No ' + ITEM + (cmdType == 'browser' ? 'reports' : cmdType == 'table' ? 'tables' : 'commands') + INFO + ' available.  Do not use ' + ITEM + (cmdType == 'browser' ? '--report' : cmdType == 'table' ? '--tables' : '--command/--immediate') + INFO + ' at this level.' + RESET)
+      ansiErrOut(INFO + 'Note: At least one row of the table must be selected to return the requested list.' + RESET)
+    }
+    term.logoff()
+    return true
+  }
+
+  /* list Tables */
+
+  function listTables(json) {
+    if ( ! cmdlist.table.list )
+      return false
+    return listFromLineCommands(json, 'table')
+  }
+
+  /* list commands */
+
+  function listCommands(json) {
+    if ( ! cmdlist.command.list )
+      return false
+    return listFromLineCommands(json, 'command')
+  }
+
+  /* list Reports */
+
+  function listReports(json) {
+    if ( ! cmdlist.report.list )
+      return false
+    return listFromLineCommands(json, 'browser')
+  }
+
+  /* list arguments available for select (TSEL) command */
+
+  function listSelections(json) {
+    if ( ! cmdlist.select.list )
+      return false
+    tselect = [ // Cribbed from webapp.js
+      { display: ['ACTIVITY','DJCJOBS','HOLD','INPUT','MDS','NJE','OUTPUT','PSTATUS','STATUS','SYSREQ','WRITER'],
+            lines: [ { label: "Job Name", len: 8 }, { label: "JobID", len: 8 } ]
+      },
+      { display: ['CLASS', 'CLASSLIM'],
+            lines: [ { label: 'Class', len: 8 } ]
+      },
+      { display: ['DJC'],
+            lines: [ { label: 'NetName', len: 8 } ]
+      },
+      { display: ['JGROUP'], /* jes2 */
+            lines: [ { label: 'JobGroup', len: 8 } ]
+      },
+      { display: ['JOBSTEPS'], /* jes2 */
+            lines: [ { label: 'StepName', len: 8 }, { label: 'ProcName', len: 8} ]
+      },
+      { display: ['ENQ'],
+            lines: [ { label: 'QName', len: 32 }, { label: 'Resource-Name', len: 8 } ]
+      },
+      { display: ['ENCLAVE'],
+            lines: [ { label: 'OwnJob', len: 8 } ]
+      },
+      { display: ['FSS'],
+            lines: [ { label: 'FSS', len: 8 } ]
+      },
+      { display: ['GROUP'],
+            lines: [ { label: 'Group', len: 8 } ]
+      },
+      { display: ['HCHECK', 'MOUNTS'],
+            lines: [ { label: 'Check', len: 32}, {label: 'SysName', len: 8 } ]
+      },
+      { display: ['HCHKHIST'],
+            lines: [ { label: 'Status', len: 16 } ]
+      },
+      { display: ['INIT'], /* jes2 */
+            lines: [ { label: 'Num', len: 4 } ]
+      },
+      { display: ['JESPLEX'], jes2: true,
+            lines: [ { label: 'Mbr', len: 8 } ]
+      },
+      { display: ['JESPLEX'],
+            lines: [ { label: 'Main', len: 8 } ]
+      },
+      { display: ['LINES', 'OFFLOAD'], /* jes2 */
+            lines: [ {label: 'Device', len: 8} ]
+      },
+      { display: ['MEMLISTL', 'MEMLISTT'],
+            lines: [ {label: 'Member', len: 8} ]
+      },
+      { display: ['NETCONN'],
+            lines: [ {label: 'Device', len: 12} ]
+      },
+      { display: ['NETSERV'],
+            lines: [ {label: 'Device', len: 10} ]
+      },
+      { display: ['NODES'],
+            lines: [ {label: 'Node', len: 8} ]
+      },
+      { display: ['PARMLIB', 'PROCLIB', 'LPALST', 'LNKLST', 'APFDS', 'PAGEDS'],
+            lines: [ {label: 'DSName', len: 32}, {label: 'Volume', len: 6} ]
+      },
+      { display: ['PRTPUN'],
+            lines: [ {label: 'DevName', len: 8} ]
+      },
+      { display: ['RESMON', 'RESMHIST'], /* jes2 */
+            lines: [ {label: 'Resource', len: 8} ]
+      },
+      { display: ['RESOURCE'],
+            lines: [ {label: 'Resource', len: 16} ]
+      },
+      { display: ['SCHENV'],
+            lines: [ {label: 'Scheduling-Env', len: 16} ]
+      },
+      { display: ['SESSION'],
+            lines: [ {label: 'Userid', len: 16} ]
+      },
+      { display: ['SPART'],
+            lines: [ {label: 'SPart', len: 8} ]
+      },
+      { display: ['SPVOL'], jes2: true,
+            lines: [ {label: 'Volume', len: 6} ]
+      },
+      { display: ['SPVOL'],
+            lines: [ {label: 'SpoolDD', len: 8} ]
+      },
+      { display: ['SYMBOL'],
+            lines: [ {label: 'Name', len: 18} ]
+      },
+      { display: ['SYSCLS'], /* jes2 */
+            lines: [ {label: 'Class', len: 4} ]
+      },
+      { display: ['SYSPLEX'],
+          lines: [ {label: 'SysName', len: 8 } ]
+      },
+      { display: ['ZERO', 'DSHOLD', 'DSNJE', 'DSOUT', 'DSSTAT', 'DSWTR', 'DSNJE', 'OUTDESC'],
+            lines: [ {label: 'DDName', len: 8}, {label: 'StepName', len: 8} ]
+      }
+    ];    
+    if ( json.function.functionName == 'ENTRY' )
+      ansiErrOut(ERROR + 'The argument on the ' + ITEM + '--use' + ERROR + ' statement is invalid or unauthorized.' + RESET)
+    else {
+      ansiLogOut('Argument  Criteria            Maximum Length     (' + json.environment.jesType + ' - ' + json.function.functionName + ')')
+      ansiLogOut('--------  ------------------  --------------')
+      var entry = tselect.find(function(item) {
+        var i = item.display.indexOf(json.function.functionName);
+        return ! ( i < 0 || ( item.jes2 && ! json.environment.jesType == 'jes2'));
+      });
+      if ( entry ) {
+        entry.lines.forEach((line, index) => {
+          ansiLogOut((index == 0 ? 'first     ' : 'second    ') + (line.label + ' '.repeat(20)).substring(0, 20) + entry.lines[index].len)
+        })
+        entry.lines.length == 2 && ansiErrOut(INFO + 'You may specify ' + ITEM + '*' + INFO + ' for the first criteria to only specify the second one.' + RESET)
+      }
+      else
+        ansiErrOut(INFO + 'No ' + ITEM + 'selection criteria' + INFO + ' defined for table ' + ITEM + json.environment.jesType + ' - ' + json.function.functionName + INFO + '.  Do not use ' + ITEM + '--select' + INFO + ' at this level.' + RESET)
+    }
+    return true
+  }
+
+  /* capture accumulated data */
+
+  function capture() {
+    if (acc.join().trim().length > 0 ) {
+
+      Object.keys(cmdlist).some((name) => {
+        var b = (cmdlist[name].long && cmdlist[name].long == last) || (cmdlist[name].short && cmdlist[name].short == last)
+          || (cmdlist[name].camel && cmdlist[name].camel == last) || (cmdlist[name].zowe && cmdlist[name].zowe == last)
+        b && cmdlist[name].value.push(acc.join(' '))
+        return b
+      })
+    }
+  }
+
+  /* object that tracks all sent commands */
+
+  const cmds = { 
+    list: [],
+    push: (command) => { cmds.list.push(command); return cmds },
+    pop: (all) => { 
+      if ( all ) { 
+        var r = cmds.toString();
+        cmds.list = [];
+        return r;
+    }
+    return cmds.list.shift() 
+    },
+    update: (addUpdate) => { ! (addUpdate === false) && cmds.push('update') ; return cmds },
+    get: () => { return cmds.list },
+    toString: () => { return cmds.list.join(';') }
+  } 
+
+  /* Compile host commands from parsed data */
+
+  function compileForHost(res, data) {
+    
+    /* process metafilters */ 
+
+    function processMetafilter() {
+      if ( cmdlist.metafilter.value.length > 0 ) {
+        var parse = cmdlist.metafilter.value.shift()
+        if ( ! parse.startsWith('off') && parse.length > 0 ) {
+          var list = parse.match(/([\w-]+\s+(?:eq|ne|gt|lt|ge|le|\>|\<|=|\^=|\>=|\<=)\s(?:'[^']+'|[\w-=+!@#$%^&()\[\]{}:;<>.,~`*?]+)(?:$|\sand\s?|\sor\s?))/g)
+          if ( list == null ) {
+            ansiErrOut(ERROR + '--metafilter option string failed to parse.  Check the following argument list.' + RESET)
+            ansiErrOut(ITEM + parse + RESET)
+            term.logoff()
+            return
+          }
+          list != null && list.forEach((filter, i) => {
+            cmds.push('fil ' + (i > 0 ? '+' : '') + filter)
+            return cmds
+          })
+          update = true
+        }
+      }
+    }
+
+    /* process sort command */
+
+    function processSort() {
+      if ( cmdlist.sort.value.length > 0) {
+        var parse = cmdlist.sort.value.shift()
+        if ( ! parse.startsWith('off') && parse.length > 0 ) {
+          cmds.push('sort ' + parse)
+          update = true
+        }
+      }
+    }
+
+    /* process temporary select command */
+
+    function processTsel() {
+      if ( cmdlist.select.value.length > 0) {
+        var parse = cmdlist.select.value.shift()
+        if ( ! parse.startsWith('off') && parse.length > 0 ) {
+          cmds.push('ts ' + parse)
+          cmds.update();
+          return true
+        }
+      }
+    }
+
+    /* Process Primary Selection Criteria that can take one or more "names." */
+
+    function processSelector(parms, parm) {
+      if ( parms.length > 0 ) {
+        var parse = parms.shift()
+        if ( ! parse.startsWith('off') && parse.length > 0 ) {
+          cmds.push(parm + ' ' + parse)
+          update = true
+        }
+      }
+    }
+
+    /* process Primary Selection criteria that are yes, no, or off. */
+
+    function processYesNoSelector(parms, parm) {
+      if ( parms.length > 0 ) {
+        var parse = parms.shift()
+        if ( ! parse.startsWith('off') && parse.length > 0 ) {
+          cmds.push((parse.startsWith('n') ? 'n' : 'y') + parm)
+          update = true
+        }
+      }
+    }
+
+    /* process tabular selections */
+
+    function processTabularSelections(level) {
+        var psel = false;
+        processTsel()
+        
+        if ( ! (level == 0 && isAutoOwnerUidFeatureDisallowed) )  // Issue owner command after primary display command issued?
+          processSelector(cmdlist.owner.value, 'owner') // Yes (or for a child display).
+        processSelector(cmdlist.jobname.value, 'jname')
+        processSelector(cmdlist.usr.value, 'user')
+        processSelector(cmdlist.origin.value, 'origin')
+        processSelector(cmdlist.jobclass.value, 'jclass')
+        processSelector(cmdlist.dest.value, 'dest')
+        processSelector(cmdlist.sysclass.value, 'sclass')
+        processYesNoSelector(cmdlist.job.value, 'job')
+        processYesNoSelector(cmdlist.atx.value, 'atx')
+        processYesNoSelector(cmdlist.tsu.value, 'tsu')
+        processYesNoSelector(cmdlist.stc.value, 'stc')
+        if ( psel )
+          update = true
+    }
+
+    // Treat auto o=&uid like host primary selections that exists prior to user issuing invocation parameters
+    // on the command line.  This lets the ISELECT override this "helpful" feature, but only if the CLI
+    // coded the &uid, not the user.
+    let isAutoOwnerUidFeatureDisallowed = cmdlist.owner.uid && parameterList.length > 0
+    parseQueryAuthDisplay(data)
+    if ( isAutoOwnerUidFeatureDisallowed )
+      processSelector(cmdlist.owner.value, 'owner')  // Issue owner command before primary display commandissued.
+    cmdlist.sysname.value.length > 0 && cmds.push('sysname ' + cmdlist.sysname.value[0])
+    cmdlist.curstep.value.length > 0 && cmds.push('curst ' + cmdlist.curstep.value[0])
+    cmdlist.setup.value.length > 0 && cmds.push('setup ' + cmdlist.setup.value[0])
+    cmdlist.acplex.value.length > 0 && cmds.push('acplex ' + cmdlist.acplex.value[0])
+    cmds.push(cmdlist.use.value = (cmdlist.use.value[0] || defaultUse) + ' ' + parameterList ) // First panel
+    cmdlist.max.value.length > 0 && cmds.push('max')
+    cmdlist.actpurge.value.length > 0 && cmds.push('actpurge on')
+    cmdlist.datefmt.value.length > 0 && cmds.push('datefmt ' + cmdlist.datefmt.value[0] + (cmdlist.datefmt.value.length > 1 ? cmdlist.datefmt.value[1] : ''))
+    cmdlist.numchar.value.length > 0 && cmds.push('numchar ' + cmdlist.numchar.value[0])
+    cmdlist.deltxt.value.length > 0 && cmds.push('deltxt ' + cmdlist.deltxt.value[0])
+    cmdlist.inptxt.value.length > 0 && cmds.push('inptxt ' + cmdlist.inptxt.value[0])
+    cmdlist.systxt.value.length > 0 && cmds.push('systxt ' + cmdlist.systxt.value[0])
+
+    /* Assemble command line */
+
+    for (let level = 0; level < cmdlist.table.levels + 1; level++ ) {
+      var update = false
+      processTabularSelections(level)
+      processSort()
+      processMetafilter()
+      if ( cmdlist.table.value[level] )
+        cmds.update(update).push('1 ' + cmdlist.table.value[level]).update()
+      else
+        if ( update )
+          cmds.update()
+    }
+    if ( term.terminated )
+      return
+
+    // Options that apply for the final display, table or browser.
+
+    var query = '?q=message,position'
+    options.post.execParms.enumValue = enumvalue
+
+    if ( cmdlist.syscmd.value.length > 0 )
+      ftype = 'syscmd'
+    else if ( cmdlist.command.value.length > 0 )
+      ftype = 'command'
+    else if ( cmdlist.report.value.length > 0 )
+      ftype = 'report'
+    else 
+      ftype = 'table'
+
+    switch (ftype) {
+      case 'syscmd':
+        break;
+      case 'report':
+        if ( cmdlist.report.value.length > 0 ) {
+          func = report
+          cmds.push('1 ' + cmdlist.report.value.pop())
+          if ( func == report ) {
+            query = cmdlist.pdf.value[0] ? '?d=pdf' : '?d=text'
+            isDownload = true;
+            options.post.execParms.enumValue = 0
+            options.post.text = {}
+            options.post.text.cc = cmdlist.cc.value[0] || 'DISCARD'
+            if ( cmdlist.lines.isAll && cmdlist.start.start == 1 )
+              options.post.text.amount = 'ALL'
+            else {
+              options.post.text.amount = 'RANGE'
+              options.post.text.start = cmdlist.start.start
+              if ( ! cmdlist.lines.linesSet && (cmdlist.pdf.value[0] || cmdlist.text.value[0]) )
+                options.post.text.count = 99999999
+              else
+                options.post.text.count = cmdlist.lines.linesSet ? cmdlist.lines.maxLines : cmdlist.lines.maxLines + 1;
+            }
+          }
+          break
+        }
+      case 'table':
+      case 'command':
+        func = table
+        if ( cmdlist.showcols.value.length > 0 && ! cmdlist.columnListRequested() ) {
+          cmds.push('show ' + cmdlist.showcols.value[0])
+          query += ',rows'
+        }
+        else if ( cmdlist.hidecols.value.length > 0 && ! cmdlist.columnListRequested() ) {
+          cmds.push('hide ' + cmdlist.hidecols.value[0])
+          query += ',rows'
+        }
+        else if ( cmdlist.columnListRequested() ) {
+          options.post.execParms.enumValue = 1
+          query += ',columns,function'
+        }
+        else
+          query += ',rows'
+        break
+      default:
+        func = table;
+        var addQuery = ',rows'
+        if ( cmdlist.showcols.value.length > 0 && ! cmdlist.columnListRequested() )
+          cmds.push('show ' + cmdlist.showcols.value[0])
+        else if ( cmdlist.hidecols.value.length > 0 && ! cmdlist.columnListRequested() )
+          cmds.push('show ' + cmdlist.hidecols.value[0])
+        else if ( cmdlist.columnListRequested() ) {
+          options.post.execParms.enumValue = 1
+          addQuery += ',columns,function'
+        }
+        query += addQuery
+    }
+
+    if ( debug & d_GeneratedCmdsAndQueries ) {
+      ansiErrOut(INFO + 'Compile result: ' + ITEM + cmds.toString() + RESET)
+      ansiErrOut(INFO + 'Query: ' + ITEM + query + RESET)
+    }
+
+    if ( cmdlist.dryrun.value == 'syntax' ) 
+      ansiErrOut(INFO + 'Dry-run ' + ITEM + Underscore + 'check' + NoUnderscore + INFO + ' complete.' + RESET)
+    else {
+      if ( -1 == query.indexOf('function') && -1 == query.indexOf('text') && -1 == query.indexOf('pdf'))
+        query += ',function'
+      parcelOutRequests(options, query, func)
+    }
+  }
+
+  /* Format the appropriate browse info to provide identification for the currently browsed data. */
+
+  function getBrowseInfo(json) {
+    let bi, jf, s, b = '        '
+    if ( json && (jf = json.function) && (bi = json.function.browseInfo) ) {
+      switch(bi.type) {
+        case 'mvsdataset': return INFO + ', MVS data set: ' + ITEM + bi.dataSetName + INFO + '(' + ITEM + bi.memberName + INFO + ')/' + ITEM + bi.volume + RESET
+        case 'healthchecker': return INFO + ', Check owner: ' + ITEM + bi.owner + INFO + ', Check name: ' + ITEM + bi.name + RESET
+        case 'spooldataset': 
+          s = ITEM + ', Job info: ' + INFO + jf.currentRowJobInfo.jobName + ITEM + ' ' + INFO +
+          jf.currentRowJobInfo.jobId
+          return ITEM + ' <' + INFO + (bi.procStepName + b).substr(0, 8) + ITEM + '.' +
+                 INFO + (bi.stepName + b).substr(0, 8) + ITEM + '.' +
+                 INFO + (bi.ddName + b).substr(0, 8) + ITEM + '>' + RESET
+        case 'job':
+          if ( bi.jobId.length + bi.jobName.length ) {
+            return INFO + ', Job info: ' + ITEM + bi.jobName + INFO + ' ' + ITEM + bi.jobId + RESET
+          }
+        }
+    }
+    return RESET
+  }
+
+  /* Handle command preparation.  Sends command stack if parcelOut not set.
+     Full parceling allows intermediate EJES host responses to show.  Part of dry-run.
+     NB: Undocumented max host command buffer length is 127.  
+  */
+
+  function parcelOutRequests(options, query, func, res, data) {
+    if ( res && data ) {
+      if ( res.headers['content-type'].indexOf('json') > 0 ) {
+        var json = JSONparse(data, 'parcelOutRequests')
+        if ( debug & d_JSONResponseInspector )
+          ansiErrOut(DEBUG + 'Parceling, response #' + options.request + ': \n' + RESET + util.inspect(json, { depth: 10, color: true, showHidden: true})) 
+        if ( cmdlist.dryrun.value.length > 0 ) {
+          let extra = ''
+          if ( json.function ) {
+            extra += INFO  + ', Function: ' + ITEM + json.function.functionName
+            json.function.currentRowJobInfo.jobId && (extra += INFO  + ', JobId: ' + ITEM + json.function.currentRowJobInfo.jobId)
+            json.function.currentRowJobInfo.jobName && (extra += INFO  + ', JobName: ' + ITEM + json.function.currentRowJobInfo.jobName)
+            json.function.currentLineText && (extra += INFO  + ', Selected line: ' + ITEM + json.function.currentLineText)
+          }
+          ansiErrOut(INFO + 'Return code:' + ITEM +  json.returnCode + extra + RESET)
+        }
+        if ( json.status && json.status != 200 ) {
+            if ( json.errorMessage ) 
+              ansiErrOut(ERROR + json.errorMessage + RESET)
+            else
+              ansiErrOut(INFO + json + reset)
+        }
+        let redirected = ! process.stdout.isTTY
+        let countOnly = (cmdlist.countOnly.value.length > 0 && ! json.keys)
+        if ( listError(json) ) {
+          if ( func == report && cmdlist.countOnly.value.length > 0 && json.position && json.function )
+            msg = INFO + 'Rows available: ' + ITEM + json.position.numberOfLines + INFO + ", Function: " + ITEM + json.function.functionName + INFO + getBrowseInfo(json);
+          else
+            msg = INFO + 'Rows available: ' + ITEM + json.position.numberOfLines + INFO + ", Function: " + ITEM + json.function.functionName + INFO + ", Function Type: " + ITEM + json.function.functionType.toUpperCase() + ERROR + ' (Positioning after error)' +  RESET;
+          ansiErrOut(msg);  // semicolon required at runtime
+          (redirected  && cmdlist.noColor.value[0] != 'off') && ansiLogOut(stripCodes(msg))
+          term.logoff()
+          return
+        }
+        rowsAvailableHint = undefined
+        if ( json.position && json.function ) {
+          let msg
+          if ( json.function.functionName == 'ENTRY' )
+            msg = ERROR + 'Function may not be authorized (EJES110) or may not be supported in the current environment (EJES029).  Use ' + ITEM + '--dry-run check' + ERROR + ' to verify.' + RESET
+          else {
+            rowsAvailableHint = json.position.numberOfLines
+            msg = INFO + 'Rows available: ' + ITEM + json.position.numberOfLines + INFO + ", Function: " + ITEM + json.function.functionName + INFO + getBrowseInfo(json);
+          }
+          ansiErrOut(msg);
+          countOnly && (redirected && cmdlist.noColor.value[0] != 'off') && ansiLogOut(stripCodes(msg))
+          if ( countOnly && func == report ) {
+            term.logoff() // Only for report because command processing of tables may require gathering row keys.
+            return
+          }
+        }
+      }
+      options.path = ejes.basePath + '/exec'
+    }
+
+    var next;   
+    for(;;) {
+      next = cmds.pop(!parcelOut) // If not parceling, fetch entire string of commands.
+      if ( ! next ) break
+      if ( next != 'update' ) break
+    }
+
+    if ( ! next ) { // If no host command left, do final download.
+      if ( cmdlist.dryrun.value == 'check' ) {
+        ansiErrOut(INFO + 'Dry-run ' + Underscore + ITEM + 'check' + NoUnderscore + INFO + ' in complete.  No output.  Use ' + ITEM + 'all' + INFO + ' to also output data as well as step results.' + RESET)
+        return;
+      }
+      query += ftype == 'command' ? ',keys' : ''
+      query += ( cmdlist.report.list || cmdlist.table.list || cmdlist.command.list ) ? ',linecommands' : ''
+      query += ( cmdlist.report.list || cmdlist.table.list || cmdlist.command.list ) || ( cmdlist.select.list ) ? ',function' : ''
+      query += ( cmdlist.select.list ) ? ',environment' : ''
+      options.path += options.query = query
+      let enumeration = enumvalue > cmdlist.lines.maxLines ? cmdlist.lines.maxLines : enumvalue
+      rowsAvailableHint && (enumeration = enumeration > rowsAvailableHint ? rowsAvailableHint : enumeration)
+      options.post.execParms.enumValue = confirmations ? 0 : enumeration // TODO : If confirmed, this should be 0.
+      options.post.execParms.command = ''
+      makeRequest(options, func)
+    }
+    else { // Make request with parcelOutRequests as the callback.
+      if ( debug & d_HostCmds )
+        ansiErrOut(INFO + 'Next (E)JES command: ' + ITEM + next + RESET)
+      options.query = 'message,position,function'
+      options.path += '?q=' + options.query //query
+      options.post.execParms.enumValue = 0
+      options.post.execParms.command = next + (next.slice(-6) == 'update' ? '' : ';update')
+      var request = debugRequest()
+      https.request(options, (res) => {
+        debugResponse(request, res)
+        if ( term.terminated )
+          return;
+        var data = ''
+        if ( ! options.headers.Cookie ) {
+          options.headers.Cookie = res.headers['set-cookie'][0]
+          delete options.headers.Authorization
+          delete options.post.initParms
+        }
+        res.on('data', (chunk) => { data += chunk })
+        res.on('end', () => { if ( ! term.terminated ) parcelOutRequests(options, query, func, res, data) })
+      })
+      .on('error', (e) => {term.requestError(e)})
+      .end(JSON.stringify(options.post))
+      }
+  }
+
+  /* main program */
+
+  term.terminated = true // Not logged on, yet.
+  if ( params )
+    setZoweParams(params)
+
+  if ( process.env._BPX_TERMPATH == 'OMVS' || process.env.NO_COLOR || process.env.FORCE_COLOR == '0' )  {
+    setErrStrip(true);
+    setOutStrip(true)
+    noColor = forceNoColor = true
+  }
+
+  // Ensure that the output of inspected objects is readable.
+  util.inspect.styles.name = util.inspect.styles.null = UTILNAME
+  util.inspect.styles.number = util.inspect.styles.boolean = UTILVAL
+  
+  process.on('SIGPIPE', () => { ansiErrOut(ERROR + 'Broken Pipe' + RESET); term.signal = true; term.logoff() })
+  process.on('SIGHUP', () => { ansiErrOut(ERROR + 'Hangup' + RESET); term.signal = true; term.logoff() })
+  process.on('SIGINT', () => { ansiErrOut(); ansiErrOut('Interrupt'); term.signal = true; term.logoff() })
+  process.on('exit', (code) => { /*term.signal &&*/ ansiErrOut(HardReset + ClearLine + HardReset + 'Done.  Exit code ' + (process.exitCode || term.hostErrorReceived || 0) + '.  Time: ' + getClientDateStamp()) })  // Both HardResets required because clear line sometimes eats characters.
+
+  /* Capture the parameters from the node.js command line. */
+
+  if ( process.argv[2] && process.argv[2].startsWith('=') ) { // Check for debugger friendly format from VS Code's launch.json member.
+    optionArray = process.argv[2].substring(1).split(' ') 
+    optionArray.unshift(process.argv[1]) // Insert real values just in case some code parses path later on.
+    optionArray.unshift(process.argv[0])
+  }
+  else
+    process.argv.forEach((item) => {optionArray.push(item)})
+
+  for (var i = 2 ; i < optionArray.length ; i++) { // Parse option (flags)
+    if ( optionArray[i].startsWith('-') ) {
+      if ( last && (last != optionArray[i] || (lastIndex && lastIndex != i)) )
+        capture()
+      acc = []
+      if ( Object.keys(cmdlist).some((name) => {
+        var b = (cmdlist[name].long && cmdlist[name].long == optionArray[i])
+          || (cmdlist[name].short && cmdlist[name].short == optionArray[i])
+          || (cmdlist[name].camel && cmdlist[name].camel == optionArray[i])
+          || (cmdlist[name].zowe && cmdlist[name].zowe == optionArray[i])
+        return b
+      })) acc.push(OMITTED)
+      else {
+        ansiErrOut(ERROR + 'Option ' + ITEM + optionArray[i] + ERROR + ' is not a valid option.  Did you use the right number of dashes?' + RESET ); 
+        return term.exitNow(29)
+      }
+      last = optionArray[i]
+      lastIndex = i
+    }
+    else 
+      acc.push(optionArray[i])
+  }
+  capture();
+  cmdlist.doReparse('debug') // Process only this value.
+  if ( d_Accounting & debug ) {
+    params && params.arguments && ansiLogOut(JSON.stringify(params.arguments, null, 2))
+    return term.exitNow(123)
+  }
+
+  if ( process.argv[1].substring(process.argv[1].length - 4) != 'ejes' ) { // Running under Zowe?
+    debug & d_ProfileDump && ansiErrOut(DEBUG + 'Running under Zowe.' + RESET)
+    if ( ! params || ! params.arguments ) {
+      ansiErrOut(ERROR + 'No parameters from Zowe.  Is Zowe being bypassed or the plugin improperly installed?' + RESET)
+      return term.exitNow(57)
+    }
+    parameterList = params.arguments.parameterList ? params.arguments.parameterList : ''
+    if ( params.arguments._[2] == 'syscmd' || params.arguments._[2] == 's' && process.argv.length > 5 ) {
+      cmdlist.syscmd.value = ['omitted ' + params.arguments.command]
+      parameterList = params.arguments.command
+    }
+    else if ( params.arguments._[2] == 'submit' || params.arguments._[2] == 'sub' && process.argv.length > 5 ) {
+      cmdlist.submit.value = ['omitted ' + params.arguments.command]
+      parameterList = params.arguments.command
+    }
+    else
+
+      cmdlist.use.value = ["omitted " + params.arguments._[2]]
+  }
+  else { // Running pure node.
+    debug & d_ProfileDump && ansiErrOut(DEBUG + 'Running pure node.' + RESET)
+    cmdlist.use.value[0] || (cmdlist.use.value = ['omitted status']) // Our favorite default.
+    let x, i = 2
+    if ( optionArray.length > i && ! optionArray[i].startsWith('-') )  {// No options, no parameters, or just options?
+      if ( (x = optionArray[i].toLowerCase()) == 'query' || x == 'q' )
+        i++
+      if ( optionArray.length <= i || (x = optionArray[i++].toLowerCase()).startsWith('-') )  
+        ;// cmdlist.use.value = ["omitted " + 'status'] // Our favorite default.
+      else {
+        cmdlist.use.value = ["omitted " + x]
+        while ( i < optionArray.length && ! (x = optionArray[i++].toLowerCase()).startsWith('-') ) {
+          parameterList += x + ' '
+        }
+        parameterList = parameterList.trim()
+      }
+    }
+  }
+  cmdlist.doReparse('profile') // Process only profile option as we need it now.
+  let padding = ' '.repeat(process.stdout.isTTY ? Math.max(process.stdout.columns, ejesVersion.length) - ejesVersion.length : 1)
+  let id = auth.setUpProfileDirectories(() => ansiErrOut(HardReset + RESET + Bright + FgCyan + BgBlack + Reverse + ejesVersion + padding + NoReverse + HardReset + RESET + '\n' + ClearLine))
+  auth.access(undefined, params, cmdlist.profile.value.length > 0 ? cmdlist.profile.value[0] : undefined)
+  cmdlist.reparse();
+  ['user', 'password', 'basepath', 'host', 'port', 'rejectUnauthorized', 'scheme', 'noColor'].forEach((setting) => {
+    ejes.override = true // Process options that can override the profile read locally or via Zowe.
+    if ( cmdlist[setting].value.length > 0 ) {
+      switch(setting) {
+        case 'user':                ejes.loggedOnUser = cmdlist.user.value[0]; break
+        case 'password':            ejes.password = cmdlist.password.value[0]; break 
+        case 'rejectUnauthorized':  ejes.rejectUnauthorized = cmdlist.rejectUnauthorized.value[0]; break
+        case 'basepath':            ejes.basePath = cmdlist.basepath.value[0]; break
+        case 'host':                ejes.hostname = cmdlist.host.value[0]; break
+        case 'post':                ejes.port = cmdlist.port.value[0]; break
+        case 'scheme':              ejes.scheme = cmdlist.scheme.value[0]; break; // May not be necessary.
+        case 'noColor':             ejes.noColor = cmdlist.noColor.value[0]; ! forceNoColor && (noColor = ejes.noColor != 'off'); break // Not allowed to override NO_COLOR, FORCE_COLOR=0, or OMVS.
+      }
+    }
+  })
+  options.post.initParms = { cols: 240, rows: 43, userAgent: ejesVersion }
+  options.path = ejes.basePath + '/init'
+  
+  const { readSchemeFile } = require('./EjesLibrary/ansiScheme.js')
+  readSchemeFile(cmdlist.scheme.value[0] || ejes.colorScheme || 'dark')
+  let redirected = ! process.stdout.isTTY
+  if ( noColor || (redirected && cmdlist.noColor.value[0] != 'off') ) {
+    setOutStrip(true)
+    if ( ejes.noColor != 'auto')  // Must be 'on' or 'auto' if here.
+      setErrStrip(true)
+  }
+  id && id()
+
+  if ( cmdlist.user.value.length > 0 && cmdlist.password.value.length > 0 ) { // uid and pwd options both required to change authorization.
+    let text = ejes.loggedOnUser + ':' + ejes.password
+    ejes.auth = (Buffer.alloc(text.length, text)).toString('base64')
+  }
+  else if ( ejes.pureNode && cmdlist.password.value.length == 0 && cmdlist.user.value.length > 0 ) {
+    ansiErrOut(ITEM + '--user' + ERROR + ' and ' + ITEM + '--password' + ERROR + ' must be specified together.' + RESET)
+    return term.exitNow(41)
+  }
+  if ( ! ejes.auth ) {
+    ansiErrOut(ITEM +  '--user uid' + ERROR + ' and ' + ITEM + '--password password' + ERROR + ' is required to use this CLI.' + RESET)
+  }
+  if ( ! ejes.hostname || ! ejes.port ) {
+    ansiErrOut(ITEM + '--host address' + ERROR + ' and ' + ITEM + '--port number' + ERROR + ' is required to use this CLI.' + RESET)
+  }
+  if ( ! ejes.auth ||  ejes.auth == '*' || ! ejes.hostname ) {
+    if ( params )
+      ansiErrOut(INFO + 'Run ' + HILITE + 'zowe profiles' + INFO + ' to enter your credentials before running this command, or use connection options.' + RESET) 
+    else
+      ansiErrOut(INFO + 'Run ' + HILITE + 'Node Ejes Profiles' + INFO + ' to enter your credentials.' + RESET)
+    return term.exitNow(51)
+  }
+  cmdlist.owner.setUser() // Call requires credentials
+  options.hostname = ejes.hostname
+  options.port = ejes.port
+  options.headers.Authorization = 'Basic ' + ejes.auth
+  options.rejectUnauthorized = ejes.rejectUnauthorized
+
+  if ( cmdlist.dryrun.value.length > 0 ) {
+    parcelOut = true;
+    debug ? (debug != 6) : (debug = 6); // Turn on parceling and assure user sees it.
+  }
+
+  debug & d_CLIOptionsAndArguments && ansiErrOut(INFO + optionArray.join(' ') + RESET)
+  debug & d_CLIOptionsAndArguments && process.stdout.isTTY && ansiErrOut(INFO + 'Terminal window is ' + ITEM + process.stdout.rows + INFO + ' x ' + ITEM + process.stdout.columns + INFO + '.' + RESET )
+  debug & d_CLIOptionsAndArguments && ansiErrOut(INFO + 'Session is ' + ITEM + (process.stdout.isTTY ? 'interactive' : 'redirected') + INFO + '.' + RESET)
+
+  options.post.platformEncoding = cmdlist.codepage.value.length > 0 ? options.post.platformEncoding = cmdlist.codepage.value[0] : '1047'
+
+  if ( cmdlist.submit.value.length > 0 ) {
+    var submission
+    function addOptions() {
+      cmdlist.recfm.value[0] && (submission += ' recfm(' + cmdlist.recfm.value[0] + ')')
+      cmdlist.lrecl.value[0] && (submission += ' lrecl(' + cmdlist.lrecl.value[0] + ')')
+      cmdlist.unit.value[0] && (submission += ' unit(' + cmdlist.unit.value[0] + ')')
+      cmdlist.volume.value[0] && (submission += ' volume(' + cmdlist.volume.value[0] + ')')
+      cmdlist.subsys.value[0] && (submission += ' subsys(' + cmdlist.subsys.value[0] + ')')
+     }
+    function interpretLocalSubmit(x) {
+      let submitPath = process.env.EJES_SUBMIT_PATH && process.env.EJES_SUBMIT_PATH.length > 0 ? process.env.EJES_SUBMIT_PATH : ''
+      let file = x[4] ? x[5] : x[1] // Double quote syntax without quotes is in 5.  Without, in 1.
+      submission = 'submit api-array ' + (x[7] || '') // Remove local file and make user's command acceptible to host.
+      if ( (cmdlist.recfm.value[0] && cmdlist.recfm.value[0] != 'f') || (cmdlist.lrecl.value[0] && cmdlist.lrecl.value[0] != '80') || cmdlist.unit.value[0] || cmdlist.volume.value[0] || cmdlist.subsys.value[0] )
+        addOptions(submission = 'submit api-array')
+      let data
+      if ( fs.existsSync(submitPath + file) ) {
+        file = submitPath + file
+        data = fs.readFileSync(file).toString().replace(/\r/gm, '').split('\n')
+      }
+      else if ( fs.existsSync(file) ) {
+        data = fs.readFileSync(file).toString().replace(/\r/gm, '').split('\n')
+      }
+      else {
+        ansiErrOut(ERROR + 'File ' + DEFAULT + submitPath + ITEM + file + ERROR + ' not found.' + RESET)
+        if ( submitPath )
+          ansiErrOut(INFO + 'Is the EJES_SUBMIT_PATH environment variable set properly?\nIs the file name or path wrong?' + RESET) 
+        else
+          ansiErrOut(INFO + 'Is the file name or path wrong?\nUsing the EJES_SUBMIT_PATH environment variable to set a path to your JCL files may help.' + RESET)   
+        return term.exitNow(38)
+      }
+      if ( data ) {
+        ansiErrOut(INFO + 'Submitting workstation file ' + ITEM + file + INFO + '.')
+        options.post.execParms.command = submission
+        options.post.execParms.commandData = data
+      }
+      else {
+        ansiErrOut(ERROR + 'File ' + DEFAULT + submitPath + ITEM + file + ERROR + ' contains no data.' + RESET)
+        return term.exitNow(38)
+      }
+    }
+
+    options.post = options.post || { execParms: { command: '', enumValue: 0 } }
+    options.post.execParms.command = cmdlist.submit.value
+    if ( (x = cmdlist.submit.value[0].match(/^(?:\s*local:\s*(([\w]\:|\\|\/|\.\/|\.|)((?:[\\|\/]){0,1}[a-z_\-\s0-9\.\\\/]+)+|(')([^"]+)(')))(?:\s(.*))*$/i)) != null ) {
+      interpretLocalSubmit(x)
+    }
+    else { // host name
+      ansiErrOut(INFO + 'Submitting MVS data set or z/OS UNIX file ' + ITEM + cmdlist.submit.value + INFO + '.')
+      submission = 'submit ' + cmdlist.submit.value
+      if ( (cmdlist.recfm.value[0] && cmdlist.recfm.value[0] != 'f') || (cmdlist.lrecl.value[0] && cmdlist.lrecl.value[0] != '80') || cmdlist.unit.value[0] || cmdlist.volume.value[0] || cmdlist.subsys.value[0] ) 
+        addOptions()
+      options.post.execParms.command = submission
+    }
+  
+    options.query = '?q=message,submittedJobs'
+    options.path += options.query
+    options.post.initParms.enumValue = 0
+    options.post.execParms.enumValue = 0
+    term.terminated = false // We will now log on.
+    makeRequest(options, submit)
+    return
+  }
+
+  if ( cmdlist.version.value.length > 0 ) {
+    term.terminated = false // Now we are trying to log on.
+    options.query = '?q=message'
+    options.path += options.query
+    options.post.initParms.enumValue = 0
+    options.post.execParms.command = 'ptf;who';
+    makeRequest(options, version)
+    return
+  }
+
+  if ( cmdlist.syscmd.value.length > 0 && cmdlist.dryrun.value != 'syntax') {
+    term.terminated = false // Now we are trying to log on.
+    let syscmd = cmdlist.syscmd.value.shift()
+    options.query = '?q=message,userLog'
+    options.path += options.query
+    options.post.initParms.enumValue = 0
+    options.post.execParms.command = (syscmd.startsWith('/') ? '' : '/') + syscmd
+    makeRequest(options, ulog)
+    return
+  }
+
+  options.path += '?q=message'
+  options.post.execParms.command += "query auth display;update"
+  if ( cmdlist.use.list || (cmdlist.dryrun.value == 'syntax' && cmdlist.syscmd.value.length > 0)) {
+    term.terminated = false // Now we are trying to log on.
+    makeRequest(options, listUse)
+  }
+  else {
+    if ( ! cmdlist.immediate.value[0] && cmdlist.command.value[0] && cmdlist.confirm.value[0]) {
+      deleteConfirmations()  // NOTE: Needed as Zowe can't check for OMITTED arguments
+      capturedCmdlist = JSON.stringify(cmdlist, null, 2)
+    }
+    else if ( ! cmdlist.command.value[0] && cmdlist.confirm.value[0] ) {
+      if ( ! fs.existsSync(os.homedir() + '/.ejes/work/confirm') ) {
+        ansiErrOut(ERROR + 'No queued commands.  Remove ' + FLAG + '--confirm' + ERROR + ' from command line.' + RESET)
+        return term.exitNow(30)
+      }
+      var data = fs.readFileSync(os.homedir() + '/.ejes/work/confirm')
+      confirmations = JSONparse(data, 'main') 
+      Object.entries(JSONparse(confirmations.cmdlist, 'main-confirmations')).forEach((item) => { 
+        cmdlist[item[0]].value = item[1].value
+      })
+      cmdlist.confirm.value[0] = []
+      rowKeys = confirmations.rowKeys
+      keyPrompts = confirmations.keyPrompts
+      confirmations = true
+      deleteConfirmations(true)  
+    }
+    else // NOTE: Needed as Zowe can't check for OMITTED arguments
+      deleteConfirmations()
+    term.terminated = false // Now we are trying to log on.      
+    makeRequest(options, compileForHost)
+  }
+} 
+/////////////////////////////////////////////////////////
+// If not run from Zowe, code executions starts here. //
+///////////////////////////////////////////////////////
+if ( process.argv[1].slice(-7).toLowerCase() != 'main.js' && process.argv[1].slice(-4).toLowerCase() != 'zowe' ) {
+  let x, batch = false, profiles = false, ansiScheme = false, api = false
+  if ( process.argv.length > 2 && process.argv[2].toLowerCase() == 'profiles')
+    profiles = true
+  else if ( process.argv.length > 2 && process.argv[2].toLowerCase() == 'api') {
+    if ( process.argv.length < 4 ) {
+      ansiErrOut(Bright + FgRed + 'USAGE:   ' + HardReset + 'node ejes api command [options]' + Bright + FgRed + '\nEXAMPLE: ' + HardReset + 'node ejes api exec --command "st;sort time d;upd" --enumvalue 10 -q messages;lines' + HardReset)
+      process.exit(58)
+    }
+    api = true
+  }
+  else if ( process.argv.length > 2 && process.argv[2].toLowerCase() == 'ansischeme') {
+    if ( process.argv.length != 4 ) {
+      ansiErrOut(Bright + FgRed + 'USAGE:   ' + HardReset + 'node ejes ansischeme <scheme>' + Bright + FgRed + '\nEXAMPLE: ' + HardReset + 'node ejes ansischeme dark' + HardReset)
+      process.exit(58)
+    }
+    ansiScheme = true
+  }
+  else if ( process.argv.length > 2 && (((x = process.argv[2].toLowerCase()) == 'batch') || x == 'b') )
+    batch = true
+  else if ( process.argv.length > 2 && (((x = process.argv[2].toLowerCase()) == 'emulate') || x == 'e') ) {
+    if ( process.argv.length > 3 && (((x = process.argv[3].toLowerCase()) == 'batch') || x == 'b') )
+      batch = true
+    else {
+      ansiErrOut(Bright + FgRed + 'USAGE:   ' + HardReset + 'node ejes batch|b [shell|cmdstack|display] [option...]' + Bright + FgRed + '\nEXAMPLE: ' + HardReset + 'node ejes emulate batch' + Bright + FgRed + ' or ' + HardReset + 'node ejes batch' + HardReset)
+      process.exit(58)
+    }
+  }
+  profiles ? require('./EjesLibrary/profiles.js') : batch ? require("./ejesbatch") : ansiScheme ? require('./ejesLibrary/ansiScheme.js').readSchemeFile(process.argv[3], 'test') : api ? require('./api') : main()
+}
+module.exports = {
+  main
+}

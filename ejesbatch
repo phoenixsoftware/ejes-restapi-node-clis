@@ -1,0 +1,3125 @@
+#!/usr/bin/env node
+//  EJES BATCH (Enhanced)- Emulation on the workstation of EJES running on the host in batch mode.
+
+/*
+* This program and the accompanying materials are made available under the terms of the
+* Eclipse Public License v2.0 which accompanies this distribution, and is available at
+* https://www.eclipse.org/legal/epl-v20.html
+*
+* SPDX-License-Identifier: EPL-2.0
+*
+* Copyright Contributors to the Zowe Project.
+*
+*/
+
+function main(params) {
+  const ejesVersion = 'EJES Batch, a CLI component of (E)JES.  V0.5.8'
+  
+  const {writeJsonResponse, isPureNode, setZoweParams, setErrStrip, setOutStrip, ansiErrOut, ansiLogOut, errColorControl, getOutStrip, getErrStrip, setExitCode, setLocalConsole, setObj, setMessage, setZoweConsole, isResponseFormatJson, stripCodes, outColorControl } = require('./EjesLibrary/ansiOut')
+  params &&  setZoweParams(params)
+  const { readSchemeFile, lineTo3270Color } = require('./EjesLibrary/ansiScheme.js')
+
+  const https = require('https')
+  const { spawn, exec, execSync } = require('child_process')
+  const { abbreviateNumber, debugRequest, debugResponse, fileSizeSI, getClientDateStamp, term, JSONparse, flagReadOnly, flagWriteable, inFile, outFile } = require('./EjesLibrary/Common.js')
+  const os = require('os')
+  const readline = require('readline')
+  const fs = require('fs')
+  const util = require('util')
+  require('./EjesLibrary/debugCodes')
+  const auth = require('./ejesLibrary/auth.js')
+
+  const reasonableEnumValue = 200
+  const responseOkay_200 = 200
+  var alarm = true
+  var autoResume = true
+  var autoupdate = false
+  var blanks = false
+  var cols = 132
+  var downloadPath = ''
+  var downloadTimeout = 10000
+  var echo = 'off'
+  var historySnapshot
+  var loggedOn = false
+  var noHistory = false
+  var pin = 'auto'
+  var profileName
+  var quietPlease = false
+  var register = undefined
+  var repl = {}
+  var reportJson = undefined
+  var resumeData
+  var rows = 27
+  var rowkeys = false
+  var screen = false
+  var scheme
+  var showHiddenColumns = false
+  var stripHostAttributes = true
+  var submitPath = ''
+  var warnLimited = undefined
+  var zoweProfile
+
+  var rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stderr,
+    removeHistoryDuplicates: true
+  });
+
+  /*************/  
+  /* Functions */
+  /*************/  
+  
+  function validateOrExit(i, argv, fns = () => { return false }, message = ('ERROR: ' + argv[i] + ' requires an argument')) {
+    if ( i + 1 >= argv.length || argv[i + 1].startsWith('-') || fns() ) {
+      ansiErrOut(message)
+      term.exitNow(53, true)
+    }
+    return argv[i + 1]
+  }
+
+  function interpretEnvironmentVariables () {
+    if ( process.env.EJES_AUTORESUME )
+      autoResume = process.env.EJES_AUTORESUME.length == 0 || process.env.EJES_AUTORESUME.toLowerCase() != 'off'
+    if ( process.env.EJES_AUTOUPDATE )
+      autoupdate = process.env.EJES_AUTOUPDATE.length == 0 || process.env.EJES_AUTOUPDATE.toLowerCase() != 'off'
+    if ( process.env.EJES_BEEP )
+      alarm = process.env.EJES_BEEP.length == 0 || process.env.EJES_BEEP.toLowerCase() != 'off'
+    if ( process.env.EJES_BLANKS )
+      blanks = process.env.EJES_BLANKS.length == 0 || process.env.EJES_BLANKS.toLowerCase() != 'off'
+    if ( process.env.EJES_ECHO )
+      echo = process.env.EJES_ECHO.length == 0 || process.env.EJES_ECHO.toLowerCase() != 'off'  ? 'on' : 'off'
+    if ( process.env.EJES_SCREEN )
+      screen = process.env.EJES_SCREEN.length == 0 || process.env.EJES_SCREEN.toLowerCase() != 'off'
+    if ( process.env.EJES_SUBMIT_PATH )
+      submitPath = process.env.EJES_SUBMIT_PATH.length == 0 ? '' : process.env.EJES_SUBMIT_PATH
+    if ( process.env.EJES_DOWNLOAD_PATH )
+      downloadPath = process.env.EJES_DOWNLOAD_PATH.length == 0 ? '' : process.env.EJES_DOWNLOAD_PATH
+      if ( process.env.EJES_DOWNLOAD_TIMEOUT )
+      downloadTimeout = process.env.EJES_DOWNLOAD_TIMEOUT.length == 0 ? '60000' : parseInt(process.env.EJES_DOWNLOAD_TIMEOUT) * 1000
+    if ( process.env.EJES_INACTIVITY )
+      if ( process.env.EJES_INACTIVITY.length > 0 && process.env.EJES_INACTIVITY >= 2 || process.env.EJES_INACTIVITY <= 99 )
+        keepAlive.maxMinutes = process.env.EJES_INACTIVITY
+      else {
+        ansiErrOut('ERROR: The EJES_INACTIVITY environment variable range not set to 2-99.')
+        term.exitNow(52, true)
+      }
+    if ( process.env.EJES_TERMINAL ) {
+      interpretTerminal({value: 'terminal ' + (process.env.EJES_TERMINAL.length == 0 ? '5' : process.env.EJES_TERMINAL), exit: 50})
+    }
+  }
+
+  /* Interpret command line - First pass BEFORE reading profile */
+
+  function interpretCommandLine() {
+    var argv = []
+    var i, j, value, command, stack, cmdstack, ncSkip, firstOption = 4
+    process.argv.forEach((item) => {argv.push(item.toLowerCase())})
+    if ( argv.length == 3 && argv[2].indexOf(' ') != -1 && argv[2].startsWith('*' ) ){
+      argv[2].split(' ').forEach((item) => { argv.push(item) })
+      argv.splice(2, 2)
+    }
+    if ( params ) {
+      if ( ! ['shell', 'sh', 'prompt'].some((item) => { return params.arguments._[2] == item }) )
+        io.pushBufferInput((['cmdstack', 'cmd', 'stack', 'stk'].some((item) => { return params.arguments._[2] == item }) ? '' : params.arguments._[2] + ' ') + (params.arguments.parameterList || ''))
+    }
+    else if ( argv.length > 3 ) {
+      let commandIdx = argv[1].endsWith('ejesbatch') ? 2 : argv[2].toLowerCase() == 'ejes' ? 4 : 3
+      argv[1].endsWith('ejesbatch') && (firstOption = 3)
+      if ( ! ['shell', 'sh', 'prompt', 'cmdstack', 'cmd', 'stack', 'stk'].some((item) => { return argv[commandIdx] == item }) ) { 
+        command = argv[commandIdx]  // Should be a valid primary display command.  Command stack is optional.
+      }
+    }
+    if ( argv.length > firstOption ) {
+      for (i = firstOption; i < argv.length; i++ ) {
+        value = ''
+        if ( argv[i].startsWith('-') )
+        switch(argv[i]) {
+          case '-b':   case '--blanks':       blanks = true; break
+          case '-a':   case '--autoupdate':   autoupdate = true; break
+          case '-e':   case '--echo':         echo = 'on'; break
+          case '-q':   case '--quiet':        quietPlease = true; break
+          case '-h':   case '--help':         case '--ha':   case '--helpapp': 
+            ansiErrOut(interpretHelp(i + 1 < argv.length ? argv[i + 1] : ''))
+            term.exitNow(0, true)
+          case '-s':   case '--screen':       screen = true; break
+          case '-t':   case '--terminal':     interpretTerminal({value: 'terminal ' + (i + 1 < argv.length ? argv[i + 1] : '5'), exit: 50}); i++; break
+          case '-v':   case '-V':             case '--version':      id(); term.exitNow(0, true)
+          case '--cs': case '--colorScheme':   case '--color-scheme':  case '--scheme':
+            scheme = validateOrExit(i, argv, () => { return ! fs.existsSync(__dirname + '/EjesLibrary/' + argv[i + 1] + '.scheme')},
+              ('ERROR: --colorScheme requires the name of an existing file.  Do not specify the extension or path.'))
+            i++
+            break
+          case '-r': case '--resume':
+            pin = 'auto'
+            if ( i + 1 < argv.length && ! argv[i + 1].startsWith('-') ) {
+              pin = argv[++i]
+            }
+            break
+          case '--ejes-p': case '--ejes-profile':
+           zoweProfile = argv[i + 1] // Fallthru
+          case '--prof': case '--profile':
+            if ( isPureNode() )
+              profileName = validateOrExit(i, argv, () => { return ! fs.existsSync(os.homedir() + '/.ejes/profile/' + argv[i + 1]) }, 'ERROR: --profile requires the name of an existing profile.  Do not specify the extension or path.') 
+            break
+          case '-c': case '--cmdstack':
+            for (j = i ; j + 1 < argv.length; j++ ) {
+              if ( argv[j + 1].startsWith('-') )
+                break
+              cmdstack = argv[j + 1].trim()
+            }
+            i = j;
+            break
+          case '--dbg': case '--debug': case '--dv': case 'debug-value':
+            for (j = i ; j + 1 < argv.length; j++ ) {
+              if ( null == argv[j + 1].match(/(?:\d+\+|\+\d+|\d+|\+)+/) )
+                break
+              value += argv[j + 1]
+            }
+            i = j;
+            value && (debug = Math.max(0, eval(value)))
+            ansiErrOut(INFO + 'debug is ' + ITEM + debug + 'D' + INFO + ', ' + ITEM + debug.toString(16) + 'H' + INFO + ', ' + ITEM + debug.toString(2) + 'D' + INFO + '.' + RESET)
+            break
+          case '-i' : case '--inactivity':
+            keepAlive.maxMinutes = validateOrExit(i, argv, () => { let val; return (value = argv[ i + 1]) > 99 || value < 2 || isNaN(value) },
+              'ERROR: --inactivity requires a value between 2 and 99.')
+            break
+          // Overrides for after profile is read.
+          case '--no-color': case '--nc':
+            ncSkip = i + 1
+            break;
+          case '--cs': case '--colorScheme':   case '--color-scheme':  case '--scheme':
+          case '--user':
+          case '--password': case '--pass': case '--pw':
+          case '--host':
+          case '--port':
+          case '--base-path': case '--bp':
+          case '--reject-unauthorized': case '--ru':
+            i++ // All the above require an argument.
+            break
+        }
+        else {
+          if ( stack ) {
+            if ( ncSkip == i )
+              continue;
+            ansiErrOut('ERROR: Only one operand is allowed.  You specified "' + stack + '" and "' + argv[i] +'".\nDid you forget to enclose the operand is double quotes?')
+            term.exitNow(54, true)
+          }
+          ! params && (stack = argv[i])
+        }
+      }
+    }
+    if ( (! (! command && ! stack)) && command || stack )
+      io.pushBufferInput((command || '') + ' ' + (stack || '')) // First any primary command and command stack.
+    cmdstack && io.pushBufferInput(cmdstack) // Second any cmdstack option that might have been specified.
+    return true
+  }
+
+  /* Interpret command line connection info - Second pass AFTER profile is interpreted. */
+
+  function interpretCommandLineConnectInfo() {
+    var i, argv = [], credentials = {
+      uid: undefined, pw:  undefined,
+      revise: function () {
+        if ( this.uid && this.pw ) {
+          let text = this.uid  + ':' + this.pw
+          ejes.auth = (Buffer.alloc(text.length, text)).toString('base64')
+          ejes.loggedOnUser = this.uid
+          this.uid = this.pw = undefined
+        }
+      },
+      setUid: function(uid) { this.revise(this.uid = uid) },
+      setPw:  function(pw)  { this.revise(this.pw = pw)   }
+    }
+    process.argv.forEach((item) => {argv.push(item.toLowerCase())})
+    if ( argv.length == 3 && argv[2].indexOf(' ') != -1 && argv[2].startsWith('*' ) ){
+      argv[2].split(' ').forEach((item) => { argv.push(item) })
+      argv.splice(2, 2)
+    }
+    if ( argv.length > 2 ) {
+      for (i = 2; i < argv.length; i++ ) {
+        value = ''
+        switch(argv[i]) {
+          case '--user': credentials.setUid(validateOrExit(i, argv)); i++; break;
+          case '--password': case '--pass': case '--pw': credentials.setPw(validateOrExit(i, argv)); i++; break;
+          case '--host': ejes.hostname = validateOrExit(i, argv); break;
+          case '--port': ejes.port = validateOrExit(i, argv, () => { return null == argv[i + 1].match(/^\d*$/)}, 'ERROR: --port requires an numeric argument'); break;
+          case '--base-path': case '--bp': ejes.basePath = validateOrExit(i, argv); break;
+          case '--nc': case '--no-color':
+            if ( ! forceNoColor || (i + 1 < argv.length && ! argv[i + 1].startsWith('-')))
+              noColor = (i + 1 == argv.length) || argv[i + 1].toLowerCase() != 'off' // Not allowed to override NO_COLOR, FORCE_COLOR=0, or OMVS.
+            break
+          case '--cs': case '--colorScheme':   case '--color-scheme':  case '--scheme':
+            scheme = argv[i + 1] // Had to pass on first pass.
+            break
+          case '--reject-unauthorized': case '--ru': 
+            ejes.rejectUnauthorized = validateOrExit(i, argv, () => { return argv[i + 1] != 'true' && argv[i + 1] != 'false' }, 'ERROR: --base-path requires an argument of true or false') 
+            break
+        }
+      }
+    }
+    ejes.loggedOnUser && credentials.setUid(ejes.loggedOnUser)
+    if ( credentials.pw ) {
+      ansiErrOut('ERROR: --user and --password must both be specified together.')
+      term.exitNow(41, true)
+    }
+    return true
+  }
+
+  /* Interpret local file submit */
+
+  function interpretLocalSubmit(x) {
+    let file = x[4] ? x[5] : x[1] // Double quote syntax without quotes is in 5.  Without, in 1.
+    let submission = 'submit api-array ' + (x[7] || '') // Remove local file and make user's command acceptible to host.
+    let data
+    if ( fs.existsSync(file) )
+      data = fs.readFileSync(file).toString().replace(/\r/gm, '').split('\n')
+    else
+      if ( fs.existsSync(submitPath + file) ) {
+        file = submitPath + file
+        data = fs.readFileSync(file).toString().replace(/\r/gm, '').split('\n')
+      }
+    else if ( submitPath ) {
+      ansiErrOut(ERROR + 'Neither file ' + ITEM + file + ERROR + ' nor ' + ITEM + submitPath + file + ERROR + ' found.' + RESET)
+      ansiErrOut(INFO + 'Is the EJES_SUBMIT_PATH environment variable set properly?\nIs the file name or path wrong?' + RESET) 
+
+    }
+    else {
+      ansiErrOut(ERROR + 'File ' + ITEM + submitPath + file + ERROR + ' not found.' + RESET)
+      ansiErrOut(INFO + 'Is the file name or path wrong?\nUsing the EJES_SUBMIT_PATH environment variable to set a path to your JCL files may help.' + RESET) 
+    }
+    if ( data )
+      hostQuery(submission, true, data)
+  }
+
+  /* capture notice information */
+
+  const  timePart = '(\\d{2})[:.](\\d{2})(?:[:.](\\d{2})){0,1}(?:[:.](\\d{2})){0,1}'
+  const julianMask = '|(?:-((?:19|20)\\d{2})[-\\.](\\d{3}))'
+  const yyyyxxxxMask = '(?:(?:-((?:19|20)\\d{2})[/-](\\d{2})[/-](\\d{2}))'
+  const xxxxyyyyMask = '(?:(?:-(\\d{2})[/-](\\d{2})[/-]((?:19|20)\\d{2}))'
+  var date = { year: 1, month: 2, day: 3, julianDay: 4, julianYear: 5, mask: yyyyxxxxMask }
+  function captureNoticeInformation (json) {
+    var x
+    if ( json.notice ) {
+      if ( json.notice.optionNotices ) {
+        json.notice.optionNotices.forEach((notice) => {
+            switch((x = notice.split('='))[0]) {
+              case 'DateFmt':
+                //ansiErrOut(x[1])
+                switch (x[1]) {
+                  case 'YYYY.MM.DD': case 'YYYY/MM/DD': date.year = 5; date.month = 6; date.day = 7; date.julianyear = 8; date.julianDay = 9; date.mask = yyyyxxxxMask + julianMask; break
+                  case 'YYYY.DD.MM': case 'YYYY/DD/MM': date.year = 5; date.day = 6; date.month = 7; date.julianyear = 8; date.julianDay = 9; date.mask = yyyyxxxxMask + julianMask; break
+                  case 'MM.DD.YYYY': case 'MM/DD/YYYY': date.month = 5; date.day = 6; date.year = 7; date.julianyear = 8; date.julianDay = 9; date.mask = xxxxyyyyMask + julianMask; break
+                  case 'DD.MM.YYYY': case 'DD/MM/YYYY': date.day = 5; date.month = 6; date.year = 7; date.julianyear = 8; date.julianDay = 9; date.mask = xxxxyyyyMask + julianMask; break
+                  case 'YYYY.DDD':   case 'YYYY-DDD'  : date.year = date.day = date.month = undefined; date.julianyear = 5; date.julianDay = 6; date.mask = julianMask.substring(1, julianMask.length - 1)
+                }
+                date.mask = timePart + date.mask + '){0,1}' 
+                break
+            }
+          }
+        )
+      }
+    }
+  }
+
+  /* download: Object to handle download command mediated host downloads. */
+
+  const download = {
+    
+    arrangement: [],          // Storage for the column arrangement between chunks of tables being download.
+    child: undefined,         // Child object during interrupt monitoring.
+    chunks: 0,                // Indicates non-zero download chunks handled in last transaction
+    data: {},                 // All download parameters.  This area is deleted between runs.
+    inProgress: false,        // A browser is downloading.
+    lineOutCount: 0,          // Track logical end of download for tables.
+    squelch: false,           // Set to true when the remaining output should be discarded.
+    tableInProgress: false,   // A table is downloading.
+
+    /* Parse and interpret download command. */
+
+    interpret: (values) => {
+      if ( ! reportJson || ! reportJson.position ) {
+        ansiErrOut(ERROR + 'Display a browser or tabular display before using download.' + RESET)
+        return false
+      }
+      download.squelch = false
+      delete download.reason
+      delete download.exception
+      download.size = 0
+      download.startTime = Date.now()
+      var dd = download.data = { cc: 'DISCARD' }
+      let argv = values.toUpperCase().split(' ')
+      let syslog = reportJson.function.functionName == 'SYSLOG'
+      let log = reportJson.function.functionName == 'OPERLOG' || syslog
+      var flagFound = false // Track flags as after one is found, only flags are allowed.
+      var end
+      argv.shift() // Drop 'download' from the list.
+      captureNoticeInformation(reportJson)
+      for ( i = 0; i < argv.length; i++) {
+        function checkFlag(flag) {
+          flag == 'TXT' && (dd.txt = flagFound = true)
+          flag == 'TEXT' && (dd.txt = flagFound = true)
+          flag == 'PDF' && (dd.pdf = flagFound = true)
+          flag == 'MARK' && (dd.mark = flagFound = true)
+          flag == 'KEEP' && (dd.keep = flagFound = true)
+          flag == 'DISCARD' && (dd.discard = flagFound = true)
+          flag == 'INTERPRET' && (dd.interpret = flagFound = true)
+          flag == 'NOTIT' && (dd.notitles = flagFound = true)
+          flag == 'NOTITLE' && (dd.notitles = flagFound = true)
+          flag == 'NOTITLES' && (dd.notitles = flagFound = true)
+          flag == 'NOLIMIT' && (dd.nolimit = flagFound = true)
+          flag == 'NOLIM' && (dd.nolimit = flagFound = true)
+          return flagFound
+        }
+        function convertToUnixValue(timeDate, j) {
+          let pattern = new RegExp(date.mask)
+          let match = pattern.exec(timeDate)
+          if ( match != null ) {
+            ansiErrOut(timeDate)
+            ansiErrOut(match)
+            let target = new Date() // Current time and date.
+            ! dd.timeRange && (dd.timeRange = { todStart: target.valueOf() })
+            target.setHours(parseInt(match[1]))
+            target.setMinutes(parseInt(match[2]))
+            target.setSeconds(match[3] ? parseInt(match[3]) :  0)
+            target.setMilliseconds(match[4] ? parseInt(match[4]) * 100 : 0) // tenths of a second
+            target.setYear(match[date.year] ? parseInt(match[date.year]) : match[date.julianYear] ? parseInt(match[date.julianYear]) : target.getFullYear())
+            target.setMonth(match[date.month] ? parseInt(match[date.month]) : target.getMonth())
+            target.setDate(match[date.day] ? parseInt(match[date.day]) : (match[date.julianDay] ? parseInt(match[date.julianDay]) : target.getDate()))
+            if ( j == 0 )
+              dd.timeRange.todStart = target.valueOf()
+            else
+              dd.timeRange.todEnd = target.valueOf()
+            return true
+          }
+        }
+        value = argv[i]
+        if ( i == 0 ) {
+          if ( ! checkFlag(value) ) {
+            value == '*' && (dd.start = log ? reportJson.position.logInfo.timeStamp : reportJson.position.currentLineNumber)
+            if (value == 'FIRST') {
+              if ( log ) {
+                ansiErrOut(ERROR + 'Log browsers do not support FIRST.  Position to TOP and use "*" instead.'+ RESET)
+                return
+              }
+              dd.start = 1
+            }
+            if ( ! dd.start && log )
+              if ( convertToUnixValue(value, i) )
+                continue
+            if ( ! dd.start ) {
+              if ( isNaN(dd.start = parseInt(value)) ) {
+                ansiErrOut(ERROR + 'Parameter ' + (i + 1) + ' is invalid: ' + value + RESET)
+                return false
+              }
+            } 
+          }
+        }
+        else if ( i == 1 ) {
+          if ( flagFound || ! checkFlag(value) ) {
+            if ( value == '*' )
+              if ( dd.timeRange )
+                dd.timeRange.todEnd = reportJson.position.logInfo.timeStamp
+              else
+                end = reportJson.position.currentLineNumber
+            if (value == 'LAST')
+              if ( ! dd.timeRange )
+                end = reportJson.position.numberOfLines
+              else
+                continue // LAST implied for time range.
+            if ( ! end && dd.timeRange )
+              if ( convertToUnixValue(value, i) )
+                continue
+            if ( ! end ) {
+              if ( isNaN(end = parseInt(value)) ) {
+                ansiErrOut(ERROR + 'Parameter ' + (i + 1) + ' is invalid: ' + value + RESET)
+                return false
+              }
+            }
+          }
+        }
+        else {
+          if ( ! checkFlag(value) )  {
+            ansiErrOut(ERROR + 'Parameter ' + (i + 1) + ' is invalid: ' + value + RESET)
+            return false
+          }
+        }
+      }
+    dd.amount = 'RANGE'
+    download.txt = !! dd.txt
+    download.pdf = !! dd.pdf
+    if ( dd.timeRange ) {
+        if (! dd.timeRange.todEnd && ! dd.nolimit ) { // NOTE: Can't tell how many lines in a time range, so assume user is wary.
+          ansiErrOut(ERROR + 'Use of a time range without an end time requires the use of ' + ITEM + 'NOLIMIT' + ERROR + '.' + RESET)
+          return
+        }
+      }
+      else {
+        if ( log ) {
+          ! dd.timeRange && (dd.timeRange = {})
+          dd.timeRange.todStart = reportJson.position.logInfo.timeStamp; // Current line by time.
+          delete dd.count // End is implied
+        }
+        else {
+          dd.start = dd.start || 1
+          dd.count = end ? Math.min(parseInt(reportJson.position.numberOfLines), end) - dd.start + 1
+                              : parseInt(reportJson.position.numberOfLines) - dd.start + 1
+        }
+      }
+      //ansiErrOut(download)
+      if ( dd.timeRange ) {
+        ansiErrOut(new Date(dd.timeRange.todStart).toString())
+        dd.timeRange.todEnd && ansiLogOut(new Date(dd.timeRange.todEnd).toString())
+      }
+      if ( dd.interpret || dd.keep )
+        dd.cc = dd.interpret ? "INTERPRET" : "KEEP"
+      if ( ! dd.nolimit && download && dd.timeRange && dd.timeRange.todStart && ! dd.timeRange.todEnd ) {
+        ansiErrOut(ERROR + 'The download you specified could be unexpectedly large and was canceled.' + RESET)
+        ansiErrOut(ERROR + 'Use ' + ITEM + 'NOLIMIT' + ERROR + ' to run anyway.  Or specify a beginning and end time range.' + RESET)
+        return
+      }
+      warnLimited = undefined
+      if ( ! dd.nolimit && (reportJson.function.functionName == 'BROWSER' && dd.count > 1000 ||  reportJson.function.functionName != 'BROWSER' && dd.count > 100) ) {
+        let count = dd.count
+        dd.count = reportJson.function.functionName == 'BROWSER' ? 1000 : 100
+        warnLimited = MSG + reportJson.function.functionName + ' output was limited to ' + ITEM + (reportJson.function.functionName == 'BROWSER'? 1000 : 100) + 
+                      MSG + (reportJson.function.functionName == 'BROWSER' ? ' lines.' : ' rows.') + RESET + '\n' +
+                      MSG + 'Specify ' + ITEM + 'NOLIMIT' + MSG + ' to download ' + ITEM + count + MSG + ' lines, or specify start and end '
+                      + (reportJson.function.functionName == 'BROWSER' ? 'lines' : 'rows') + '.' + RESET
+      }
+      return true
+    },
+
+    /* Beginning running user's requested download. */
+
+    run: () => {
+      var dd = download.data
+      let d = new Date
+      download.date = d.getFullYear() + d.getMonth().toString().padStart(2, '0') + d.getDate().toString().padStart(2, '0') + '-' + d.getHours().toString().padStart(2, '0') + d.getMinutes().toString().padStart(2, '0') + d.getSeconds().toString().padStart(2, '0')
+
+      dd.chunks = 0
+      if ( ! reportJson ) {
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'download.run: No json to queue download.data.' + RESET)
+        io.resume()
+        return
+      }
+      else if ( reportJson.function && reportJson.function.functionType != 'browser' ) {
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'download.run: Function type is not a browser: ' + ITEM + reportJson.function.functionType + RESET)
+        download.table()
+        return
+      }
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'download.run: Downloading browser contents.' + RESET)
+      if ( download.data.mark ) {
+        let extra = ''
+        reportJson.function.currentRowJobInfo.jobName && (extra += 'JOBNAME=' + reportJson.function.currentRowJobInfo.jobName.trim())
+        reportJson.function.currentRowJobInfo.jobId && (extra += ',JOBID=' + reportJson.function.currentRowJobInfo.jobId)
+        ansiLogOut('___(E)JES_DOWNLOAD_MARK___' + extra)
+      }
+      options.post = options.post || { execParms: { command: '', enumValue: 0} }
+      options.post.execParms.enumValue = 0
+      options.post.text = {}
+      options.post.text.cc = download.data.cc
+      options.post.text.amount = download.data.amount
+      download.data.start && (options.post.text.start = download.data.start)
+      download.data.count && (options.post.text.count = download.data.count)
+      download.data.timeRange && download.data.timeRange.todStart && (options.post.text.todStart = download.data.timeRange.todStart)
+      download.data.timeRange && download.data.timeRange.todEnd && (options.post.text.todEnd = download.data.timeRange.todEnd)
+      options.query = download.pdf ? '?d=pdf' : '?d=text'
+      options.path = ejes.basePath + '/exec' + options.query
+      options.post.execParms.command = ''
+      options.post.execParms.enumValue = reasonableEnumValue
+      download.inProgress = download.running = true;
+      makeRequest(options, report)
+    },
+
+    /* Run table specific download. */
+
+    table: () => {
+      if ( reportJson.function.functionType != 'tabular' ) {
+        ansiErrOut(ERROR + 'You may only download browser or tabular displays.' + RESET)
+        io.resume()
+        return
+      }
+      if ( download.pdf ) {
+        download.txt = true
+        ansiErrOut(MSG + 'PDF not supported for tables.  Text option used instead.' + RESET)
+      }
+      download.tableName = reportJson.function.functionName + '_' + download.date
+      download.file = download.txt ? downloadPath + download.tableName + '.txt' : ''
+      download.file && ansiErrOut(INFO + 'Download to file ' + ITEM + download.file + INFO + ' requested.' + RESET)
+      download.running = true
+      ! download.file && download.data.mark && ansiLogOut('___(E)JES_DOWNLOAD_MARK___')
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'download.table: Downloading table contents.' + RESET)
+      download.lineOutCount = 0
+      options.post = options.post || { execParms: { command: '', enumValue: 0} }
+      options.query = '?q=message,position,rows,function'
+      rowkeys && (options.query += ',keys')
+      options.path = ejes.basePath + '/exec' +  options.query
+      options.post.execParms.command = 'loc ' + download.data.start
+      options.post.execParms.enumValue = reasonableEnumValue
+      download.tableInProgress = true
+      download.file && process.stderr.isTTY && ansiErrOut(ClearLine + MSG + 'Recv\'d: ' + HILITE + fileSizeSI(download.size).padStart(9, ' ') + RESET + '\x1b[1A')
+      makeRequest(options, table)
+    },
+
+    /* Send tabular to stdout 
+         Returns true if there is no more output.
+    */
+
+    outputHeadersThenColumns: (json) => {
+      if ( download.squelch ) {
+        download.tableInProgress = false
+        return true
+      }
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'outputHeadersThenColumns' + RESET)
+      if ( json.rows && json.rows.length > 0 ) {
+        if ( download.arrangement.length < 1 )
+          for (let i = 0 ; i < json.rows[0].columns.length ; i++ )
+            download.arrangement.push(i)
+        var keyWidth = 0;
+        if ( json.keys ) {
+          json.keys.forEach((key) => {
+            rowkeys && (keyWidth = Math.max(keyWidth, key.length))
+          })
+        }
+        let chunk = ''
+        json.rows.forEach((row, i) => { // Output Headers
+          if ( download.lineOutCount > download.data.count )
+            return      
+          if ( i == 0 && download.lineOutCount == 0 && ! download.data.notitles ) {
+            var headerLine = ''
+            var dashLine = ''
+            if ( keyWidth > 0 ) {
+              headerLine = 'Row Key' + ' '.repeat(keyWidth - 6)
+              dashLine = '-'.repeat(keyWidth) + ' '
+            }
+            download.arrangement.forEach((index, j) => {
+              var col = row.columns[index]
+              if ( ! col || ! col.columnWidth || col.columnWidth == 0 )
+                return
+              headerLine += ((col.titleSubscript == 0 ? col.columnTitle : col.columnName) + ' '.repeat((col.columnWidth + 1))).substring(0, col.columnWidth + 1)
+              dashLine += '-'.repeat(col.columnWidth) + ' '
+            })
+            chunk += headerLine + '\n'
+            chunk += dashLine + '\n'
+            download.lineOutCount = 2
+            download.data.count += 2
+          }
+          var data = ''
+          if ( keyWidth )
+            data = json.keys[i] + ' '.repeat((keyWidth + 1) - json.keys[i].length)
+          download.arrangement.forEach((index, j) => {
+            var col = row.columns[index]
+            if (  ! col || ! col.columnWidth || col.columnWidth == 0 )
+              return
+            data += (col.columnText + ' '.repeat((col.columnWidth + 1))).substring(0, col.columnWidth + 1)
+          })
+          download.lineOutCount++
+          chunk += data + '\n'
+        })
+        if ( download.file ) {
+          try { fs.appendFileSync(download.file, outColorControl(chunk)) }
+          catch(e) { ansiLogOut(e.message || e) }
+        }
+        else
+          ansiLogOut(chunk)
+      }
+      else {
+        download.tableInProgress = false
+        debug & d_LogoffCancelEndOfData && ansiErrOut(DEBUG + "No more lines?" + RESET)
+        download.exception = true
+        return true
+      }
+      if ( (Date.now() - download.startTime) > (downloadTimeout + 2000) ) {
+        download.tableInProgress = false
+        download.InterruptMonitorOff((downloadTimeout / 1000) + ' second timeout exceeded.  Timeout can be set in the environment with EJES_DOWNLOAD_TIMEOUT.')
+        debug & d_LogoffCancelEndOfData && ansiErrOut(DEBUG + (downloadTimeout / 1000) + ' second timeout exceeded.' + RESET)
+        return true
+      } 
+      if ( download.lineOutCount > download.data.count ) { // Logical end of output?  Probably.
+        download.tableInProgress = false
+        download.InterruptMonitorOff('Output line count exceeded.')
+        debug & d_LogoffCancelEndOfData && ansiErrOut(DEBUG + "Output line count exeeded" + RESET)
+        return true
+      }
+      debug & d_LogoffCancelEndOfData && ansiErrOut(DEBUG + "More lines?" + RESET)
+      return false
+    },
+
+    killSemaphore: () => {
+      try {
+        if ( fs.existsSync(download.semaphorePath) ) { 
+          fs.unlinkSync(download.semaphorePath)
+          debug & d_Reserved && ansiErrOut('Parent: Semaphore unlinked:' + download.semaphorePath)
+        }
+      } catch (e) {
+        debug & d_Reserved && ansiErrOut('Parent: Semaphore unlink failed:' + e.message)
+      }
+      download.squelch = true
+    },
+
+    semaphorePath: os.homedir() + '/.ejes/work/SIGINT',
+    InterruptMonitorOn: (semaphore) => {
+      function cancel() {
+        debug & d_Reserved && ansiErrOut('Attempting cancel-download')
+        term.cancel()
+        debug & d_Reserved && ansiErrOut('Sent cancel-download')
+      }
+      if ( !download.interruptMonitor && os.platform() == 'win32' ) {
+        download.semaphorePath = os.homedir() + '/.ejes/work/SIGINT_' + (cookie ? (cookie.match(/.+=([0-9A-F]{6}).*/))[1] + '_' : '') + semaphore
+        try {
+          fs.writeFileSync(download.semaphorePath, 'SIGINT')
+          debug & d_Reserved && ansiErrOut('Parent: Semaphore created:' + download.semaphorePath)
+        } catch (e) {
+          debug & d_Reserved && ansiErrOut('Download.InterruptMonitorOn: No Interrupts to cancel download because semaphore write failed: ' + e)
+          return
+        }
+        download.child = spawn('ejesInt.cmd', [options.hostname, options.port, downloadTimeout, download.semaphorePath, debug], {
+            cwd: process.cwd(),
+          env: process.env,
+          shell: false,
+          stdio: ['inherit','inherit','inherit'],
+        })
+        download.interruptMonitor = true
+        download.child.once('exit', (code) => {
+          debug & d_Reserved && ansiErrOut(`Parent: Child exited with code: ${code}.`)
+          download.squelch = true
+          download.killSemaphore()
+          if ( download.interruptMonitor && code != 2 )
+            cancel()
+          switch(code) {
+            case 1:   download.reason = 'Unexpected error in interrupt monitor.'; break;
+            case 2:   download.reason = 'Semaphore file is not found.  Download apparently complete.'; break;
+            case 4:   download.reason = 'User pressed Control+C.'; break
+            case 62:  download.reason = 'Timeout of ' + (downloadTimeout / 1000) + ' seconds expired.  Timeout can be set in the environment with EJES_DOWNLOAD_TIMEOUT.'; break
+            case 104: download.reason = 'Semaphore closed unexpectedly.'; break
+          }
+        })
+        download.child.once('error', (error) => {
+          debug & d_Reserved && ansiErrOut(`Parent: Child errored out with error: ${error}.`)
+          download.squelch = true
+          download.killSemaphore()
+          if ( download.interruptMonitor )
+            cancel()
+          download.reason = error.message || 'Error occurred.'
+        })
+        download.child.once('SIGINT', (data) => {
+          debug & d_Reserved && ansiErrOut(`Parent: Child exited with interupt: ${data}.`)
+          download.squelch = true
+          download.killSemaphore()
+          if ( download.interruptMonitor )
+            cancel()
+          download.reason = 'Child exited with interupt.  Reason: "' + data + '"'
+        })  
+      }
+    },
+
+    InterruptMonitorOff: (reason) => {
+      delete download.running
+      reason && (download.reason = reason)
+      if ( download.interruptMonitor ) {
+        debug & d_Reserved && ansiErrOut('Parent: Turning off interrupt monitor.')
+        if ( os.platform() == 'win32' ) {
+          download.killSemaphore()
+          debug & d_Reserved && ansiErrOut('Parent: Can delete interrupt monitor under WIN32 only.')
+          delete download.child
+        }
+        debug & d_Reserved && ansiErrOut('Parent: Interrupt monitor off')
+        delete download.interruptMonitor
+      }
+      return true
+    },
+
+    InterruptCleanup: () => { (download.tableInProgress || download.inProgress) && download.InterruptMonitorOff() && ansiErrOut('Download cleanup occurred.')}
+  }
+
+  /* Interpret help command */
+
+  function interpretHelp(request) {
+    let h = '\n'
+    switch(request) {
+      case 'all':
+        let text ='\n';
+        ['meta', 'autoupdate', 'beep', 'blanks', 'cls', 'columns', 'commands', 'debug', 'download', 'echo', 'exit', 'flush', 'help', 'history', 'inactivity', 'logoff', 'noColor', 'pause', 'pg', 'quiet', 'resume', 'return', 'rowkeys', 'scheme', 'screen', 'state', 'strip', 'terminal', '!'].forEach((help)=>{
+          h += interpretHelp(help)
+          h += '--------------------'
+        })
+        break
+      default:  
+          h += INFO + 'Usage: ejes batch [<options][[>stdout][2>stderr][<stdin]]\n' + RESET +
+                '\n' +
+                'Options may be issued on the terminal command line.  Surround the option argument in double-quotes if it includes spaces.\n' +
+                'Single dash options are not available to Zowe users.  Use the double dash option instead.\n' +
+                '    -a,    --autoupdate              Automatically add the update command when you press enter (starts with ' + DEFAULT + 'autoupdate off' + RESET +')\n' +
+                '    --bp,  --base-path               specify the base path for the (E)JES RESTapi server; defaults to /EjesWeb/api\n' +
+                '    -b,    --blanks                  display blank lines to stderr (starts with ' + DEFAULT + 'blanks on' + RESET +')\n' +
+                '    -c,    --cmdstack "cmd;cmd..."   specify commands to run before any redirected input or before manual entry\n' +
+                '    -cs,   --colorScheme             specify a color scheme to use (dark, light, powershell, mono, none, or a user created scheme)\n' +
+                '    --dbg, --debug n                 enable debugging options as directed by technical support\n' +
+                '    -e,    --echo                    host output sent stdout (starts with ' + DEFAULT + 'echo off' + RESET +')\n' +
+                '    -i,    --inactivity m            specify host activity timeout in minutes (starts set to 2)\n' +
+                '    -h,    --help topic              request help, optionally with a specific help topic (see list below)\n' +
+                '           --host address            specify the host address for the (E)JES RESTapi server\n' + 
+                '    --ha,  --helpApp                 request help (for Zowe compatibility)\n' +
+                '    --nc,  --no-color                display lines without ANSI color codes (starts with ' + DEFAULT + 'no-color off' + RESET +')\n' +
+                '    --pw,  --password pw             specify password, typically you TSO credentials; you must also specify --user\n' +
+                '           --port                    specify the port for the (E)JES RESTapi server\n' +
+                '    -q     --quiet                   specify whether to mute interactive informational messages\n' + 
+                '    -r     --resume                  resume a paused session, optionally specifying the pin used to pause a session, or off to prevent an auto-resume\n' +
+                '    --ru,  --reject-unauthorized     specify whether to reject self-signed certificates; should be true if specified\n' +
+                '    -s,    --screen                  colorized screen sent to stderr (starts with ' + DEFAULT + 'screen off' + RESET +')\n' +
+                '    -t.    --terminal m              preset terminal model or size; see -h terminal\n' +
+                '           --user uid                specify user id, typically your TSO credentials; you must also specify --password\n' +
+                '    -V,    --version                 version info\n' +
+                '\n' +
+                'You may optionally redirect stdout, stderr, and stdin.  You may pipe stdout to another program.\n' + 
+                '    stdout               host output and the result of the ' + INFO + 'download' + RESET +' meta command\n' +
+                '    stderr               host error and status information (and a colorized screen image if ' + INFO + 'screen' + RESET +' set to ' + DEFAULT + 'on' + RESET +')\n' +
+                '    stdin                host commands and meta commands to run from a redirected input file for batch work\n' +
+                '                         (Note: --cmdstack commands run before stdin commands)\n' +
+                '\n' + 
+                'Help topics include:\n' +
+                '    meta                 general help for meta commands and a list all meta commands\n' +
+                '    <meta-command>       help for specific meta command, for example, screen\n' +
+                '    all                  help for each meta command, all in one output stream\n' +
+                '    registers            help for setting, saving, and reusing commands, even between sessions\n' +
+                '    cmdstack             help for issuing more than one (E)JES or meta command at a time, and for --cmdstack.\n' +
+                '\n'
+                break
+      case 'cmdstack':
+          h +=  INFO + 'Command stacking\n' + RESET +
+                '\n' +
+                'To enter more than one command, you can stack them by typing a semicolon between them.  The commands can be (E)JES\n' +
+                'commands or CLI meta commands.  You need to include update commands as necessary, or issue the ' + INFO + 'autoupdate on' + RESET + ' command.\n' +
+                'The ' + INFO + 'flush' + RESET + ' meta command inserted in a command stack causes all the commands to the left to execute before continuing\n' +
+                'with the ones to the right.  The commands ' + INFO + 'exit' + RESET + ', ' + INFO + 'logoff' + RESET + ', or ' + INFO + 'return' + RESET + ' will act like flush prior to terminating the current\n' +
+                'session.\n' +
+                '\n' +
+                'Example: ' + HILITE + 'hcheck;fil result > 8;sort result a;flush;enq;flush;dynexit;logoff' + RESET + '\n' +
+                '         Three screens will display.  With ' + INFO + 'autoupdate on' + RESET + ', hcheck filtering and sorting will be shown.\n' + 
+                '         With ' + INFO + 'autoupdate off' + RESET + ', the hcheck filtering and sorting not be shown.  Manually insert ;UPDATE.\n' +
+                '         The final command terminates the session and exits after first displaying the dynexit table.\n' + 
+                '\n' +
+                'Example: ' + HILITE + 'ejes emulate batch -a -s --cmdstack "hcheck;fil result > 8;sort result a;flush;enq;flush;dynexit;logoff"' + RESET + '\n' +
+                '         The ' + INFO + '-a' + RESET + ' option turns on auto updating.  The ' + INFO + '-s' + RESET + ' option outputs (E)JES results to stderr.\n' +
+                '         The ' + INFO + '--cmdstack' + RESET + ' option supplies a list of commands to execute in order.  The double-quotes are required.\n' +
+                '         Three screens will display.  The filtering and sorting specified for hcheck will be shown.\n' + 
+                '         The final command terminates the session and exits after first displaying the dynexit table.\n' + 
+                '\n' +
+                'Example: ' + HILITE + 'ejes emulate batch -a -s --cmdstack "st;o=&uid;flush;crdelay;1-20 d;flush;ulog;download;logoff"' + RESET + '\n' +
+                '         The ' + INFO + '-a' + RESET + ' option turns on automatic updating.  The ' + INFO + '-s' + RESET + ' option outputs (E)JES results to stderr.\n' +
+                '         The ' + INFO + '--cmdstack' + RESET + ' option supplies a list of commands to execute in order.  The double-quotes are required.\n' +
+                '         The status display is shown for your user id.  The display line command is issued for the first 20 lines\n' +
+                '         after setting the command response delay to 0 seconds.  The ULOG is then displayed and the contents\n' + 
+                '         downloaded so you can view all the results.\n' + 
+                '\n'
+                break
+      case 'meta':
+          h +=  INFO + 'Meta comands\n' + RESET +
+                '\n' +
+                'Meta commands are entered alone on the command line.  They are distinct from host commands in that they\n' +
+                'comtrol the behavior of the ejesbatch CLI.  Some meta commands have default values, which in colorized\n' +
+                'mode are shown with ' + DEFAULT + 'this color' + RESET +'.  Like the host (E)JES batch mode, meta commands may be included in any\n' +
+                'redirected input.  They will be echoed at the command line.  Of special interest are the ' + INFO + 'screen' + RESET + ' and ' + INFO + 'echo' + RESET + '\n' +
+                'meta commands.  ' + INFO + 'Screen on' + RESET + ' causes host output to be sent to stderr, while ' + INFO + 'echo on' + RESET + ' sends it to stdout.  This\n' +
+                'allows you to navigate the (E)JES displays with ease and capture data to stdout as you find it.  Note that\n' +
+                'all program output not proceeded by an ' + INFO + 'echo on' + RESET + ' is sent to stderr, not stdout.\n' +
+                '\n' + 
+                INFO + 'Meta commands that must be entered before first host command:\n' + RESET +
+                '\n' +
+                '  ○ ' + INFO + 'terminal' + RESET +' [*|[<number>[,|x] <number>]|[2|3|4|' + DEFAULT + '5' + RESET +']\n' +
+                '\n' +
+                INFO + 'Other meta commands:\n' + RESET +
+                '\n' +
+                '  ○ ' + INFO + 'autoupdate|aup' + RESET + ' [on|' + DEFAULT + 'off' + RESET +']]\n' +
+                '  ○ ' + INFO + 'blanks' + RESET +' [on' + RESET +'|' + DEFAULT + 'off' + RESET + ']\n' +
+                '  ○ ' + INFO + 'cls' + RESET +'\n' +
+                '  ○ ' + INFO + 'columns' + RESET + +' [hidden]\n' +
+                '  ○ ' + INFO + 'commands' + RESET +'\n' +
+                '  ○ ' + INFO + 'debug' + RESET +' [value]\n' +
+                '  ○ ' + INFO + 'download' + RESET +' [<number>|*|<time-date>|' + DEFAULT + 'first' + RESET +'][<number>|<time-date>|' + DEFAULT + 'last' + RESET +'][keep|' + DEFAULT + 'discard' + RESET +'|interpret][mark][notit|notitle|notitles|nolim|nolimit][txt|text|pdf]\n' +
+                '  ○ ' + INFO + 'echo' + RESET +' [on|' + DEFAULT + 'off' + RESET +'|it]]\n' +
+                '  ○ ' + INFO + 'exit' + RESET +'\n' +
+                '  ○ ' + INFO + 'flush' + RESET +'\n' +
+                '  ○ ' + INFO + 'help' + RESET +'\n' +
+                '  ○ ' + INFO + 'history|his' + RESET +' [clear|<number>[ <number>...]]\n' +
+                '  ○ ' + INFO + 'inactivity' + RESET +' [<minutes>]\n' +
+                '  ○ ' + INFO + 'logoff' + RESET +'\n' +
+                '  ○ ' + INFO + 'noColor' + RESET +' [' + DEFAULT + 'off' + RESET +'|on]\n' +
+                '  ○ ' + INFO + 'pause' + RESET +' [<pin>|' + DEFAULT + 'auto' + RESET +']\n' +
+                '  ○ ' + INFO + 'pg' + RESET +' [[|down|d|next|n|off|prev|p|rfind|r|u|up] [|d|data|h|half|p|page|<number>[S|M|H|D]]]\n' +
+                '  ○ ' + INFO + 'quiet' + RESET +' [on|' + DEFAULT + 'off' + RESET +']\n' +
+                '  ○ ' + INFO + 'return' + RESET +'\n' +
+                '  ○ ' + INFO + 'rowkeys' + RESET +' [on|' + DEFAULT + 'off' + RESET +']\n' +
+                '  ○ ' + INFO + 'scheme' + RESET +' [<color scheme file>]\n' +
+                '  ○ ' + INFO + 'screen' + RESET +' [on|' + DEFAULT + 'off' + RESET +'|it]\n' +
+                '  ○ ' + INFO + 'state' + RESET +'\n' +
+                '  ○ ' + INFO + 'strip' + RESET +' [' + DEFAULT + 'on' + RESET +'|off]\n' +
+                '  ○ ' + INFO + '!' + RESET + '[<shell command>]]\n' +
+                '  ○ ' + INFO + '@' + RESET + '[0-9|h|p]\n' +
+                '  ○ ' + INFO + '@@' + RESET + '[0-9|h|p]\n' +
+                '  ○ ' + INFO + '@c' + RESET + '[|0-9|h|p]\n' +
+                '  ○ ' + INFO + '@d' + RESET + '\n' +
+                '  ○ ' + INFO + '@r' + RESET + '\n' +
+                '  ○ ' + INFO + '@s' + RESET + '\n' +
+                '\n' +
+                'For help on a specific meta command, type: \n' +
+                '\n' +
+                '  ' + INFO + 'help' + RESET +' [<meta command>|shell|registers]\n' +
+                '  EXAMPLE: ' + ITEM + 'help screen' + RESET + '\n' +
+                '\n' +
+                '"#" introduces a comment.  The remainder of the line, including semicolons, is ignored. \n' +
+                'Use #comments to document registers and text files used for redirected stdin. \n' +
+                '\n' +
+                '  EXAMPLE: ' + ITEM + '# This is a comment line' + RESET + '\n' +
+                '  EXAMPLE: ' + ITEM + 'terminal *;st;echo on;# A comment; it explains the rest of the line.' + RESET + '\n' +
+                '\n'
+                break
+      case 'resume':
+            h += INFO + '[-r|--resume ' + RESET + '[' + DEFAULT + 'auto' + RESET + '|<pin>]]\n' + RESET +
+              '\n' +
+              'Resume a previously paused session.  Without an argument, resume the ' + ITEM + 'auto' + RESET + ' session.  The\n' +
+              'argument is an alphanumeric pin previously specified on the pause meta command.  Specify ' + ITEM + 'off' + RESET + '\n' +
+              'to prevent resuming an ' + ITEM + 'auto' + RESET + ' session when ' + ITEM + 'EJES_AUTORESUME' + RESET + ' is not set to ' + ITEM + 'off' + RESET + '.  Paused sessions\n' +
+              'expire after two minutes regardless of inactivity setting.  No host activity takes place\n' +
+              'until you issue a command or press Enter.  Though a resume overrides all settings, the\n' +
+              'display command and command stack are still sent to the host.  Use with ' + ITEM + 'shell' + RESET + ' to avoid this.\n'+
+              'Use the ' + ITEM + 'nop' + RESET + ' command instead of ' + ITEM + 'shell' + RESET + ' to wake the host, and to show a screen if ' + ITEM + 'screen' + RESET + ' or \n' +
+              ITEM + 'echo' + RESET + ' are ' + ITEM + 'on' + RESET + '.\n' +
+              '\n'
+              break
+      case 'pause':
+        h += INFO + 'pause' + RESET + '[' + DEFAULT + 'auto' + RESET + '|<pin>]\n' + RESET +
+          '\n' +
+          'Pause the current (E)JES session.  Auto-resume (unless ' + ITEM + 'EJES_AUTORESUME' + RESET + ' is set to ' + ITEM + 'off' + RESET + ').\n' + 
+          'Paused sessions expire after two minutes regardless of inactivity setting.  You may\n' +
+          'specify any alphanumeric pin, however ' + ITEM + 'off' + RESET + ' is reserved.  Pins are used for running EJES Batch\n' +
+          'in multiple simultaneous automation scripts.  All settings are saved.  See also ' + ITEM + '--resume' + RESET + '.\n' +
+          '\n'
+          break
+      case 'pg':
+            h += INFO + 'pg ' + RESET +' [[|down|d|next|n|off|prev|p|rfind|r|u|up] [|d|data|h|half|p|page|<number>[S|M|H|D]]]\n' + RESET +
+              '\n' +
+              'When you press enter, by default the next screen of data is displayed unless the bottom of data\n' +
+              'is displayed.  This is equivalent to the ' + INFO + 'down page' + RESET +' host command.  To change this behavior for the\n' +
+              'current display, use the ' + INFO + 'pg' + RESET +' command.  When you display a different tabular or browser, the behavior\n' +
+              'resets to the default behavior.  The following host commands, together with their full syntax,\n' +
+              'are supported by this meta command.  ' + INFO + 'Down' + RESET +' and ' + INFO + 'up' + RESET +' support the parameters ' + INFO + 'page' + RESET +' (or ' + INFO + 'p' + RESET +'), ' + INFO + 'half' + RESET +' (or ' + INFO + 'h' + RESET +'),\n' +
+              '' + INFO + 'data' + RESET +' (or ' + INFO + 'd' + RESET +'), and <number of lines>.  Refer to the (E)JES Reference manual for complete details.\n' +
+              '\n' +
+              'Command  CLI-Alias  Default Parameter  Description\n' +
+              '-------  ---------  -----------------  -----------\n' +
+              '         n/a        n/a                Show current pg command string.\n' +
+              'down     d          page               Move the scrollable area of the display down.\n' +
+              'next     n          <omitted>          Reposition to next data set or scroll forward by time.\n' +
+              'off      n/a        n/a                Set default behavior, same as issuing ' + INFO + 'pg down p' + RESET +'.\n' +
+              'prev     p          <omitted>          Reposition to the top of lower numbered data set or scroll backward by time.\n' +
+              'rfind    r          n/a                Repeat the last FIND command\n' +
+              'up       u          page               Move the scrollable area of the display up. \n' +
+              '\n' +
+              ITEM + 'pg up page' + RESET + '  Set Enter to scroll up one page.\n' +
+              ITEM + 'pg rfind' + RESET + '    Set Enter to repeat previous find command.\n' +
+              ITEM + 'pg prev 1m' + RESET + '  Set Enter to scroll backward 1 minute on a log browser.\n' +
+            '\n'
+              break;
+      case '!': case 'shell':
+            h += INFO + '!' + RESET + '[<shell command>]\n' +
+              '\n' +
+              'The shell exit command allows you to issue shell command in line for your system.  The shell\n' +
+              'exit command is an exclamation point character followed by text.  This command cannot be command\n' +
+              'stacked.  The ! must be the first character on the line.  Output from the executed command is\n' +
+              'is buffered and will not appear until the terminal window exits.  All input in the shelled\n' +
+              'terminal will receive an EOD (end of data) unless you also specify redirection from a file.\n' +
+              '\n' +
+              'Under Windows, if the ! is not followed by text, a new terminal windows specified by the COMSPEC\n' +
+              'environment will display.\n' +
+              '\n' +
+              ITEM + '!dir' + RESET + '            Display a directory of the current working directory inline.\n' +
+              ITEM + '!type test.txt' + RESET + '  Display the file test.txt inline.\n' +
+            '\n'
+              break;
+      case 'state':
+        h += INFO + 'state\n' + RESET +
+          '\n' +
+          'Display the current running state and configuration of (E)JES Batch.\n' +
+          '\n'
+          break  
+      case 'registers': case '@' : case '@@': case '@c': case '@d': case '@s': case '@r':
+            h +=  INFO + 'Registers\n' + RESET +
+              '\n' +
+              'Registers allow you to save and reissue commands.  All registers are stored for use between\n' +
+              'ejes batch sessions.  There are 10 general use registers, 0 through 9.  An additional register,\n' +
+              'h, allows you to auto-run commands.  If you start the session with EJES BATCH SHELL, and the\n' +
+              'register does not start with a "#", the CLI will auto-run the home register as the first command.\n' +
+              'The prepend auto-run register p works similarly to the home auto-run register, but always runs\n' +
+              'first no matter how EJES BATCH is invoked, even if the home auto-run register is eligible, also.\n' +
+              'If there is a command stack, the contents of the prepend auto-run register are prepended with a\n' +
+              'trailing semi-colon.  If both the prepend and home registers are eligible, the prepend register\n' +
+              'will be prepended with a trailing semicolon to the home register.\n' +
+              '\n' +
+              '@[0-9hp]           Copy the register to the command line and run it.\n' +
+              '@@[0-9hp]          Copy the register to the command line so you can edit it.  @@0 copies register 0.\n' +
+              '                   Undefined results for redirected stdin or use of --cmdstack.\n' +
+              '<commands>@[0-9hp] Replace register with commands.  @<register> must be the final characters on the line.\n' +
+              '@c                 Clear all registers.  Registers are not saved until @s is issued.\n' +
+              '@c[0-9hp]          Clear a registers.  Registers are not saved until @s is issued.\n' +
+              '@d                 Display all the registers.\n' +
+              '@r                 Revert registers to last save.\n' +
+              '@s                 Save all registers.\n' +
+              '\n'  +
+              '                   st;o=rb*;update@1  (Store commands in register 1)\n' +
+              '                   @c1                (Clear register 1)\n' +
+              '                   @r                 (Revert to saved registers)\n' +
+              '                   @5                 (Immediately run commands in register 5)\n' +
+              '\n' +
+              '                   terminal *;o=rb*;st;sort status d;display fov;update;screen on;# Initialize like ISPF@h\n' +
+              '\n'
+              break
+      case 'beep':
+          h += INFO + 'beep' + RESET +' [' + DEFAULT + 'on' + RESET +'|off]  (EJES_BEEP)\n' +
+                '\n' +
+                'When ' + INFO + 'on' + RESET +', play the terminal beep sound for error messages or alarm records on the operlog with\n' +
+                INFO + 'logattr on' + RESET +'.  If output is redirected, the sound is disabled.\n' +
+                '\n'
+                break
+      case 'quiet': case 'q':
+          h += INFO + 'quiet' + RESET +' [on|' + DEFAULT + 'off' + RESET +']  (-q, --quiet)\n' +
+                '\n' +
+                'Specify whether to mute interactive informational messages.\n' +
+                '\n'
+                break
+      case 'blanks':
+          h += INFO + 'blanks' + RESET +' [on|' + DEFAULT + 'off' + RESET +']  (-b, --blanks, EJES_BLANKS)\n' +
+                '\n' +
+                'Specify whether to display blank lines when ' + INFO + 'screen' + RESET +' is ' + INFO + 'on' + RESET +'.  Setting to ' + INFO + 'off' + RESET +' results\n' +  
+                'in a cleaner display.  With no argument, the meta command returns the current state.\n' +
+                '\n'
+                break
+      case 'cls':
+          h +=  INFO + 'cls\n' + RESET +
+                '\n' +
+                'Erase the screen\n\n'
+                break
+      case 'nocolor': case 'nc':
+          h += INFO + 'noColor' + RESET +' [' + DEFAULT + 'off' + RESET +'|off]  (--nc, --no-color, NO_COLOR, FORCE_COLOR=0)\n'+
+                '\n' +
+                'Specify whether stderr output is colorized.  IBM OMVS turns this on by default,\n' + 
+                'otherwise noColor is off by default.  With no argument, the meta command returns the\n' + 
+                'current state.\n' +
+                '\n'
+                break
+      case 'scheme': case 'cs':
+          h += INFO + 'scheme' + RESET +' [' + DEFAULT + 'dark' + RESET +'|light|powershell|mono|none|<user-defined>]  (--cs, --colorScheme)\n'+
+                '\n' +
+                'Specify scheme file to use to colorize stderr output.  Running under IBM OMVS causes the scheme\n' + 
+                'specified to be ignored.  You can create your own color schemes.  Issue ' + INFO + 'help scheme-info\n' + RESET + 
+                'for instructions on how.\n' +
+                '\n'
+                break
+      case 'scheme-info':
+                try { h += fs.readFileSync(__dirname + '/EjesLibrary/ColorScheme.txt').toString() }
+                catch(e){ h += './EjesLibrary/ColorScheme.txt not found.' }  
+                break
+      case 'columns':
+          h += INFO + 'columns' + RESET + ' [hidden]\n' +
+                '\n' +
+                'Return a list of column names and column titles available for the current host tabular display.\n' +
+                'Specify ' + INFO + 'hidden' + RESET + ' to show hidden columns, an operation that causes extra host transactions.\n' +
+                '\n'
+                break
+      case 'commands':
+          h += INFO + 'commands' + RESET +'\n' +
+                '\n' +
+                'Return a list of line commands available for the current host display.\n\n'
+                break
+      case 'debug':
+          h += INFO + 'debug' + RESET +' [value]  (--dbg, --debug)\n' +
+                '\n' +
+                'Specify debugging values.  Use with the guidance of technical support.\n\n'
+                break
+      case 'download': 
+          h += INFO + 'download' + RESET +' [<number>|*|<time-date>|' + DEFAULT + 'first' + RESET +'][<number>|<time-date>|' + DEFAULT + 'last' + RESET +'][keep|' + DEFAULT + 'discard' + RESET +'|interpret][mark][notit|notitle|notitles|nolim|nolimit][[txt|text]|pdf]\n' +
+                '\n' +
+                'Used on the CLI as a substitute for the host ' + INFO + 'extract' + RESET +' command.  Output a tabular\n' + 
+                'display or a browser display to stdout regardless of ' + INFO + 'echo' + RESET +' meta command setting.\n' + 
+                'The full length and width is downloaded regardless of the ' + INFO + 'terminal' + RESET +' setting.  Neither\n' +
+                INFO + 'strip' + RESET + ' nor ' + INFO + 'noColor' + RESET +' apply.  The ' + INFO + 'keep' + RESET +', ' + INFO + 'discard' + RESET +', and ' + INFO + 'interpret' + RESET +' settings apply only to spool\n' + 
+                'output.  ' + INFO + 'Notitles' + RESET +' removes the two header lines from table downloads.  ' + INFO + 'Mark' + RESET +' inserts a\n' + 
+                '"mark record" before outputting the downloaded object.  ' + INFO + 'Nolimit' + RESET + ' allows downloads of\n' +
+                'browsers over 1000 lines and all other displays over 100 lines when a start and end\n' +
+                'position are not specified.  Time-date positions are available only for OPERLOG and SYSLOG.\n' +
+                '\n' +
+                INFO + 'Text' + RESET + ' and ' + INFO + 'pdf' + RESET + ' cause output to a file in the current working directory.  The file name is\n' +
+                'created using the job or data set name.  If neither is specified, text is streamed\n' +
+                'to stdout.  ' + INFO + 'Pdf' + RESET + ' is supported only in browsers and will be ignored in tabular displays.\n' +
+                '\n' +
+                'A mark record consists of ' + INFO + '___(E)JES_EXTRACT_MARK___' + RESET +' which is three underscore characters,\n' + 
+                'followed by the words (E)JES, EXTRACT, and MARK separated from each other by an underscore,\n' + 
+                'and three more underscore characters.\n' + 
+                '\n' +
+                'If there is job information associated with the source of the extract (e.g., if\n' + 
+                'extracting while browsing a job’s output), the characters ' + INFO + 'JOBNAME=jobname,JOBID=jobid' + RESET +'\n' + 
+                'are appended to the end of the mark record. The job name and job ID are variable-length\n' + 
+                'values; there are no embedded blanks in the mark record.\n' +
+                '\n'
+                break
+      case 'autoupdate':
+          h += INFO + 'autoupdate|aup' + RESET +' [on|' + DEFAULT + 'off' + RESET +']]  (-a, --autoupdate, EJES_AUTOUPDATE)\n' +
+                '\n' +
+                'Specify ' + INFO + 'on' + RESET +' to append ";UPDATE" to each host transaction.  Normally, EJES BATCH requires you to \n' +
+                'issue the UPDATE command when you want it.  Keying UPDATE is most useful if you are redirecting\n' +
+                'stdout to a file.  If you are using EJES BATCH interactively, issuing ' + INFO + 'autoupdate on' + RESET +' will make your\n' +
+                'experience more like using the host through 3270 emulation, saving you keystrokes.  With no\n' + 
+                'argument, the meta command returns the current state.  Note that while doing find operations, \n' +
+                'auto updating should be temporarily turned off.\n' + 
+                '\n'
+                break
+      case 'echo':
+          h += INFO + 'echo' + RESET +' [on|' + DEFAULT + 'off' + RESET +'|it]]  (-e, --echo, EJES_ECHO)\n' +
+                '\n' +
+                'Controls output to stdout.   Specify ' + INFO + 'on' + RESET +' to output host responses to stdout.  Does not\n' + 
+                'affect the output of ' + INFO + 'download' + RESET +' or the functioning of ' + INFO + 'screen' + RESET + '.  With no argument, the meta\n' + 
+                'command returns the current state.  Specify ' + INFO + 'it' + RESET +' to toggle ' + INFO + 'echo on' + RESET + ' then ' + INFO + 'echo off' + RESET + ' to ouput\n' +
+                'a single screen.  The argument ' + INFO + 'it' + RESET +' is invalid for the ' + INFO + '--echo' + RESET +' option.\n' +
+                '\n'
+                break
+      case 'exit':
+          h += INFO + 'exit' + RESET +'\n' +
+                '\n' +
+                'Send the host a terminate request and exit the program.  Inserts ";UPDATE" in the command stack to ensure\n' +
+                'any commands that require it will be shown in the output.\n' +
+                '\n'
+                break
+      case 'help':
+          h += INFO + 'help' + RESET +' (-h, --help)\n' +
+                '\n' +
+                'Request help.  The meta command help and the command line option provide the same results.\n' +
+                'Help is sent to stderr.  You may redirect it to a file with 2>.  Use ' + INFO + 'noColor on' + RESET +' to remove\n' + 
+                'remove ANSI escape codes.\n' +
+                '\n' +
+                ITEM + 'help meta' + RESET + '    meta commands and a list of meta commands\n' +
+                ITEM + 'help echo' + RESET + '    help (example) to display help for echo.\n' +
+                ITEM + 'help all' + RESET + '     display all help topics.\n'
+                '\n'
+                break
+      case 'history':
+          h += INFO + 'history|his [' + RESET + 'clear' + INFO + ']' + RESET + '\n' +
+                '\n' +
+                'Display command line history, clear it, or construct a command stack of history elements.\n' +
+                'To construct a line, first issue ' + INFO + 'history' + RESET +' to see the eunumerated items.  Next, issue\n' +
+                INFO + 'history' + RESET +' followed by one or more numbers from the history list.  Semicolons are inserted\n' +
+                'between history items.  The result is presented on the command line for editing, saving\n' +
+                'to a register, and/or submission to the host.\n' +
+                '\n' +
+                ITEM + 'history' + RESET + '           Display current command line history.\n' +
+                ITEM + 'history clear' + RESET + '     Clear command line history.\n' +
+                ITEM + 'history 4 19 5' + RESET + '    Concatenate history items 4, 19, and 5 onto the command line.\n' +
+                '\n'
+                break
+      case 'inactivity':
+          h += INFO + 'inactivity' + RESET +' [minutes]  (-i, --inactivity, EJES_INACTIVITY)\n' +
+                '\n' +
+                'Specify the host inactivity timeout between ' + INFO + '2' + RESET + ' and ' + INFO + '99' + RESET + ' minutes.  Initially set to ' + INFO + '5' + RESET + '.\n' +
+                'Timer begins at logon and is refreshed every time you send a host command.  It is\n' + 
+                'not refreshed by a meta command.  Use ' + INFO + '--inactivity' + RESET + ' to specify on the command line.\n' +
+                'At expiration, the user is logged off.\n\n'
+                break
+      case 'logoff':
+            h += INFO + 'logoff' + RESET +'\n' +
+                '\n' +
+                'Send the host a terminate request and exit the program.  Inserts ";UPDATE" in the command stack to ensure\n' +
+                'any commands that require it will be shown in the output.\n'
+                '\n'
+                break
+      case 'return':
+          h += INFO + 'return' + RESET +'\n' +
+                '\n' +
+                'Send the host a terminate request and exit the program.  Inserts ";UPDATE" in the command stack to ensure\n' +
+                'any commands that require it will be shown in the output.\n' +
+                '\n'
+                break
+      case 'rowkeys':
+          h += INFO + 'rowkeys' + RESET +' [on|' + DEFAULT + 'off' + RESET +']\n' +
+                '\n' +
+                'When using the download command, determine whether to include row keys in tables.  Row keys\n' +
+                'can be use with the ' + INFO + 'locate' + RESET +' command and ' + INFO + 'key=' + RESET +' to specify the spool object so long as the spool\n' +
+                'object still exists.  Generally only useful for SED or program runs of the CLI.\n' +
+                '\n'
+                break
+      case 'screen':
+          h += INFO + 'screen' + RESET +' [on|' + DEFAULT + 'off' + RESET +']  (-s, --screen, EJES_SCREEN)\n' +
+                '\n' +
+                'When ' + INFO + 'on' + RESET +', a colorized screen is displayed (sent to) stderr along with error and status messages.\n' +
+                'When ' + INFO + 'off' + RESET +', only error and status messages are displayed.  This does not effect the current status\n' +
+                'of the ' + INFO + 'echo' + RESET +' meta command.  With no argument, the meta command returns the current state.  Specify\n' +
+                INFO + 'it' + RESET +' to toggle ' + INFO + 'screen on' + RESET + ' then ' + INFO + 'screen off' + RESET + ' to ouput a single screen.  The argument ' + INFO + 'it' + RESET +' is invalid\n' +
+                'for the ' + INFO + '--screen' + RESET +' option.\n'
+                '\n'
+                break
+      case 'strip':
+          h += INFO + 'strip' + RESET +' [' + DEFAULT + 'on' + RESET +'|off]\n' +
+                '\n' +
+                'Specify whether to strip host attributes from host responses to stdout.   Does not affect output\n' +
+                'of ' + INFO + 'download' + RESET +'.  With no argument, the meta command returns the current state.\n' +
+                '\n'
+                break
+      case 'terminal':
+          h += INFO + 'terminal' + RESET +' [*|[<number>[,|x] <number>]|[2|3|4|' + DEFAULT + '5' + RESET +']  (-t, --terminal, EJES_TERMINAL)\n' +
+                '\n' +
+                'Set the host output rows and columns, or use a standard model number.   Specify ' + INFO + '*' + RESET + ' to use\n' +
+                'the maximum number of rows and columns that fit your terminal window.  The largest allowed\n' +
+                'size is 63 x 255.  With no argument, the meta command returns the current state.\n' +
+                '\n'
+                break
+      case 'flush':
+          h += INFO + 'flush\n' + RESET +
+                '\n' +
+                'The ' + INFO + 'flush' + RESET + ' meta command inserted in a command stack causes all the commands to the left to execute before\n' +
+                'continuing with the ones to the right.  If you also issued ' + INFO + 'autoupdate on' + RESET + ', flush will insert ";UPDATE".\n' +
+                '\n' + 
+                'Example: ' + ITEM + 'hcheck;fil result > 8;sort result a;flush;enq;flush;dynexit;logoff' + RESET + '\n' +
+                '         Three screens will display.  With ' + INFO + 'autoupdate on' + RESET + ', hcheck filtering and sorting will be shown.\n' + 
+                '         With autoupdate off, the hcheck filtering and sorting not be shown.  Manually insert ;UPDATE.\n' +
+                '         The final command terminates the session and exits.\n' + 
+                '\n'
+                break
+    }
+    return h
+  }
+
+  /* Interpret terminal command */
+
+  function interpretTerminal(parm) {
+    let match
+    if ( parm.value.trim().toLowerCase() != 'terminal' ) {
+      if ( parm.value.substring(9).trim() == '*') {
+        rows = 32;
+        rows = process.stderr.isTTY ? process.stderr.rows -2 : process.stdout.isTTY ? process.stdout.rows - 2 : rows
+        cols = process.stderr.isTTY ? process.stderr.columns : process.stdout.isTTY ? process.stdout.columns : 132
+        if ( rows > 63 )
+          rows = 63
+        else if ( rows < 24 )
+          rows = 24
+        if ( rows * cols >= 65536 ) {
+          cols = 240
+        }
+        if ( cols > 255 )
+          cols = 255
+      }
+      else if ( match = parm.value.match(/^terminal (?:([2-6]\d)(?:[,x]\s{0,1}([89]\d|[12]\d{2}))|([2-5]))$/i) ) {
+        if ( match[3]) 
+          switch(match[3]) {
+            case '5': rows = 27; cols = 132; break
+            case '4': rows = 43; cols = 80; break
+            case '3': rows = 32; cols = 80; break
+            case '2': rows = 24; cols = 80; break
+          }
+        else if ( match[1] && match[2] ) {
+          if ( match[1] * match[2] > 65536 ) {
+            ansiErrOut(ERROR + 'Largest terminal is 63x255.  Usage: ' + ITEM + 'terminal [model | [rows[,|x]columns]]' + RESET)
+            return parm.exit && term.exitNow(parm.exit, true)
+          }
+          else if ( match[1] > 63 ) {
+            ansiErrOut(ERROR + 'Rows may not exceed 63.  Usage: ' + ITEM + 'terminal [model | [rows[,|x]columns]]' + RESET)
+            return parm.exit && term.exitNow(parm.exit, true)
+          }
+          else if ( match[2] > 255 ) {
+            ansiErrOut(ERROR + 'Columns may not exceed 255.  Usage: ' + ITEM + 'terminal [model | [rows[,|x]columns]]' + RESET)
+            return parm.exit && term.exitNow(parm.exit, true)
+          }
+          rows = match[1]
+          cols = match[2]
+        }
+      }
+      else {
+        ansiErrOut(ERROR + 'Terminal specified incorrectly.  Usage: ' + ITEM + 'terminal [model | [rows[,|x]columns]]' + RESET)
+        return parm.exit && term.exitNow(parm.exit, true)
+      }
+      if ( options.post.initParms ) {
+          options.post.initParms.rows = rows
+          options.post.initParms.columns = cols
+      }
+      else {
+        options.post.execParms.rows = rows
+        options.post.execParms.columns = cols
+      }
+    }
+    parm.announce && ansiErrOut(INFO + 'Terminal set to: ' + ITEM + rows + INFO + 'x' + ITEM  + cols + RESET)
+  }
+
+  /* requestError() callback customization for common.term object. */
+
+  term.requestErrorExit = function () {
+    term.logoff()
+    download.InterruptCleanup()
+  }
+
+  /* logoff() callback customization for common.term object */
+
+  term.logoffIsDownload = function() { return download.inProgress }
+  term.logoffOrTerminate = function() { return ! loggedOn }
+  term.logoffTerminate = function(parm) {
+    if ( ! term.terminated )
+      writeHistory({quiet: true})
+    debug & (d_LogoffCancelEndOfData + d_BatchTracing) && ansiErrOut(DEBUG + 'Logoff skipped.  Terminated? ' + ITEM + term.terminated + DEBUG + '  Logged on? ' + ITEM + loggedOn + RESET)
+    if (parm && parm.force)
+      term.exitNow(123, true) // Loop interrupt testing.
+  }
+  term.logoffRequestEnd = function () {
+    ! quietPlease && ansiErrOut ('Logged off.'); 
+    term.signal = true; 
+    term.exitNow(process.exitCode, true)
+  }
+  term.logoffRequestError = function(e) { term.requestError(e) }
+  term.logoffPostscript = function() {
+    loggedOn = false // logoff.postscript()
+    writeHistory()  
+  }
+
+  /* Detect errors and list them */
+
+  function listError(json, outFunction = ansiErrOut) {
+    if ( json.message && json.message.longMessages && json.message.longMessages.length > 0 ) {
+      let outStripSave = getOutStrip()
+      setOutStrip(ansiLogOut == outFunction)
+      term.setAdditiveExitCode(json)
+      let sound = (alarm && json.message.isErrorMessage && ((process.stdout.isTTY && outFunction == ansiLogOut) || (process.stderr.isTTY && outFunction == ansiErrOut))) ? '\u0007' : ''
+      json.message.longMessages.forEach((msg) => {
+        outFunction((json.message.isErrorMessage ? (ERROR + sound) : MSG) + msg + RESET)
+        if ( msg.startsWith('EJES032')) {
+          let x = msg.match(/EJES032\s(.*)\(([A-Z]+(\d+))\).*/)
+          repl.jobname = x[1]
+          repl.jobid = x[2]
+          repl.jobnum = parseInt(x[3]).toString()
+        }
+      })
+      setOutStrip(outStripSave)
+      if ( outFunction != ansiLogOut && echo == 'off' && ! process.stdout.isTTY /*&& --no-echo-messages on */ )
+        json.message.longMessages.forEach((msg) => { // Messages always echoed to redirected stdout
+          ansiLogOut(msg)
+        })
+      return json.message.isErrorMessage // Return TRUE for an error message and FALSE for an informational message.
+    }
+  } // Returns undefined if no error was issued.
+
+  /* make a request to the host */
+
+  function makeRequest(options, callback) {
+    debug & d_BatchTracing && ansiErrOut(DEBUG + 'makerequest' + RESET)
+    var request = debugRequest()
+    https.request(options, (res) => {
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'makerequest callback for request #' + ITEM + options.request + RESET)
+      debugResponse(request, res)
+      if ( term.terminated )
+        return;
+      var data = ''
+      if ( ! options.headers.Cookie ) { // NB: If cookie hasn't been copied, yet.
+        if ( ! res.headers['set-cookie'] ) {
+          ansiErrOut(ERROR + 'Logon failed with status ' + ITEM + res.statusCode + ERROR + '.  No cookie received.  Cannot continue.' + RESET)
+          if ( options.headers.Authorization ) 
+            options.headers.Authorization = '<not shown>' // Can do because quitting now.
+          res.statusCode == 405 && (ansiErrOut(HILITE + 'Status 405 - Method Not Allowed\n' + MSG + 'Status code indicates that the request method is known by the server but is not supported by the target resource.\n' + ITEM + 'Is a zowe gateway failing to resolve the host address?  Is the wrong resource at the configured address?' + RESET))
+          ansiErrOut('Options: ')
+          ansiErrOut(util.inspect(options, true, 10, true)  + RESET)
+          ansiErrOut('Response Headers: ')
+          ansiErrOut(util.inspect(res.headers, true, 10, true)  + RESET)
+          return term.exitNow(res.statusCode == 405 ? 405 : 46)
+        }
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'Got at cookie.  Editing options.' + RESET)
+        loggedOn = true
+        options.headers.Cookie = cookie = res.headers['set-cookie'][0]
+        delete options.headers.Authorization
+        delete options.post.initParms
+      }
+      options.execParms && options.execParms.commmandData && delete options.execParms.commmandData
+      var txt = false, pdf = false, file, name
+      if ( res.headers && res.headers["content-disposition"] ) {
+        var x = res.headers["content-disposition"].match(/^.*filename="(.+\.(pdf|txt))"$/, i)
+        txt = x && x[2] && x[2] == 'txt'
+        pdf = x && x[2] && x[2] == 'pdf'
+        x && x[1] && (file = x[1])
+        if ( ! /^(?:[\w]:|\\|\/).*$/.test(file) ) {
+          name = file.slice(0, file.length - 4)
+          file = downloadPath + file
+        }
+        else // Should always be an acceptable name if we are receiving a ?d= response, but if the regex fails, use:
+          name = 'download'
+      }
+      var mybuf = Buffer.alloc(0), ms = Date.now()
+      if ( download.running )
+        download.InterruptMonitorOn(name ? name + '_' + download.date : download.tableName)
+      if ( file && (download.txt || download.pdf) ) {
+        try {
+          if ( fs.existsSync(file) ) {
+            fs.unlinkSync(file)
+            ansiErrOut(INFO + 'Download to file ' + ITEM + file + INFO + ' requested.  File being replaced.' + RESET)
+          }
+          else
+           ansiErrOut(INFO + 'Download to file ' + ITEM + file + INFO + ' requested.' + RESET)
+        }
+        catch(e) { ansiErrOut(e.message || e) }
+      }
+      if ( download.inProgress ) { // Download
+        res.on('data', (chunk) => { // Download DATA response.
+          function progress(test) { // Show ticking download data size, but moderate time slice based on Zowe or pure node.
+            if ( Date.now() > ms && test && process.stderr.isTTY ) { 
+              ansiErrOut(ClearLine + MSG + 'Recv\'d: ' + HILITE + fileSizeSI(download.size).padStart(9, ' ') + RESET + '\x1b[1A')
+              ms = Date.now() + (ejes.pureNode ? 150 : 1000)
+            }
+          }
+          if ( ! term.terminated ) {
+            if ( os.platform() == 'win32' && ! fs.existsSync(download.semaphorePath)) {
+              download.squelch = true
+              download.reason = download.reason || 'Semaphore unexpectedly closed.'
+            }
+            if ( ! download.squelch && (Date.now() - download.startTime) / 1000 > (downloadTimeout + 2000) ) {
+              download.InterruptMonitorOff((downloadTimeout / 1000) + ' second timeout exceeded.  Timeout can be set in the environment with EJES_DOWNLOAD_TIMEOUT.')
+              download.squelch = true
+              term.cancel()
+              return
+            }
+            if ( download.squelch )
+              return
+            download.size += chunk.length
+            download.chunks++
+            if ( file && (download.txt || download.pdf) )
+              try { fs.appendFileSync(file, chunk) }
+              catch(e) { ansiLogOut(e.message || e) }
+            else {
+              progress(! process.stdout.isTTY)
+              chunk = Buffer.concat([mybuf, chunk])  // This potentially could prepend a partial a character to what ought to be the remainder of it.
+              if ( download.size > 1500000 ) 
+                setLocalConsole() /* Switch out Zowe console for Node's console routines if running in Zowe since Zowe concatenates all output.
+                                     Handles situation 10MB+ of 132 character line concatenations causes node.js Zowe code to slow to halt.     */
+              for (let startLastUTF8Char = chunk.length - 1; startLastUTF8Char > 0; startLastUTF8Char--) {
+                if ( chunk[startLastUTF8Char] < 128 || (chunk[startLastUTF8Char] & '\x10') ) {  // Search for last UTF8 character start. (https://en.wikipedia.org/wiki/UTF-8#Encoding)
+                  let mystr = data + chunk.slice(0, startLastUTF8Char).toString() // Turn everything up to the last character into a string.  Could be an empty string.
+                  let indexLast0C = mystr.lastIndexOf('\n')
+                  mybuf = chunk.slice(startLastUTF8Char) // Store remnant of chunk starting with the start of last character.  Could be an empty buffer.
+                  if ( indexLast0C == -1 ) // No \n in string?
+                    data = mystr // save for next chunk received.
+                  else { // found a \n.
+                    data = indexLast0C != mystr.length - 1 ? mystr.slice(indexLast0C + 1)  : ''
+                    ansiLogOut(mystr.slice(0, indexLast0C)) // Output everything up the the \n, which console.log adds.
+                  }
+                return // Get next chunk.
+                }
+              }
+              return mybuf = chunk // // No last character found, so prepend to next chunk.
+            }
+            progress(file)
+          }
+        })
+      } 
+      else { // NOT a download
+        res.on('data', (chunk) => {  // NOT a Download data response.
+          download.chunks++
+          download.size += chunk.length
+          if ( ! term.terminated ) {
+            debug & d_JSONResponseInspector && ansiErrOut(DEBUG + 'chunk on response test2 #' + util.inspect(JSONparse(options.request, 'd_JSONResponseInspector'), { depth: 20, colors: true, maxArrayLength: 1000, compact: true, breakLength: Infinity, showHidden: true}) + RESET)
+            data += chunk 
+          }
+        })
+      }
+      res.on('end', () => {  // End of HTTP response shared by both download and not a download.
+        if ( ! term.terminated ) { // Terminated?  Request end will handle that!
+          if ( download.inProgress ) { // WAS a download
+            if ( mybuf.length > 0 ) { // If there is a buffer, we must assume it ends with full character.
+              data += mybuf.toString()  // NB: Neither mybuf or data are used by "download to file".
+            }
+            if ( data )
+              ansiLogOut(data.endsWith('\n') ? data.slice(0, data.length -1) : data)
+            ! download.squelch && ansiErrOut(HILITE + (download.chunks > 0 ? 'Browser download completed: ' + fileSizeSI(download.size) + ' in ' +  abbreviateNumber((Date.now() - download.startTime) / 1000 ) + ' seconds': 'No lines to download.') + RESET)
+            download.squelch && ansiLogOut(HILITE + 'Browser download canceled.  ' + (download.reason || '') + RESET)
+            setZoweConsole() // Switch back if switch out.
+            warnLimited && ansiErrOut(warnLimited)
+            download.inProgress = false
+            download.InterruptMonitorOff() // Shutdown Interrupt Monitor Here.
+            io.resume()          
+          } 
+          else {  // Was NOT a download.
+            if ( debug & d_ResponseHeaders && options.query.startsWith('?q=') ) {
+              let json = JSONparse(data, 'debug & d_ResponseHeaders')
+              let array = options.query.substring(3).split(',').sort()
+              let result = array.reduce((prev, current, idx) => {
+                idx > 0 && (prev += ITEM + ', ')
+                let item = json[current]
+                if ( ! item )
+                  return prev + ITEM + current + HILITE + ' (missing)' + RESET
+                let noLen = false
+                switch (current ) {
+                  case 'screen': item = json.screen.screenImage; break
+                  case 'message': item = (json.message && json.message.longMessages) ?  json.message.longMessages[0] : json.message.shortMessage; break
+                  case 'function': case 'position': case 'notice': noLen = true
+                }
+                prev += INFO + current + ': ' + ITEM + (item ? ('yes' + (noLen ? '' : '(len=' + item.length + ')')) : 'no')
+                return prev
+              }, 'Host query returned following queries: ')
+              ansiErrOut(DEBUG + result + RESET)
+            }
+            debug & d_JSONResponseInspector && ansiErrOut(DEBUG + 'Response #' + options.request + RESET)
+            debug & d_JSONResponseInspector && ansiErrOut(JSONparse(data, 'makeRequest'))
+            debug & d_JSONResponseInspector && ansiErrOut(callback)
+            callback(res, data)
+          }
+        }
+      })
+    })
+    .on('error', (e) => {term.requestError(e)})
+    .end(JSON.stringify(options.post))
+  }
+
+  /* table */
+
+  function table(res, data) {
+    debug & d_BatchTracing && ansiErrOut(DEBUG + "table" + RESET)
+    if ( res.headers['content-type'].indexOf('json') > 0 ) {
+      var json = JSONparse(data, 'table');
+      if ( statusCheckExit(json, res) )
+        return
+      if ( json.position ) {
+          listError(json)
+          if ( download.outputHeadersThenColumns(json) ) {
+            download.tableInProgress = false
+            download.InterruptMonitorOff()
+            debug & d_LogoffCancelEndOfData && ansiErrOut(DEBUG + "No more lines in table()" + RESET)
+            ! (download.squelch && ! download.exception) && ansiErrOut(HILITE + (download.chunks > 0 ? 'Tabular download completed:  ' + fileSizeSI(download.size) + ' in ' +  abbreviateNumber((Date.now() - download.startTime) / 1000 ) + ' seconds': 'No lines to download.') + RESET);
+            (download.squelch && ! download.exception)  && ansiLogOut(HILITE + 'Tabular download canceled.  ' + (download.reason || '') + RESET);
+            warnLimited && ansiErrOut(warnLimited)
+          }
+          else { // Fetch more lines
+            download.file && process.stderr.isTTY && ansiErrOut(ClearLine + MSG + 'Recv\'d: ' + HILITE + fileSizeSI(download.size).padStart(9, ' ') + RESET + '\x1b[1A')
+            debug & d_LogoffCancelEndOfData && ansiErrOut(DEBUG + "Fetching more lines in table()" + RESET)
+            options.path = ejes.basePath + '/exec' + options.query
+            options.post.execParms.command = ''
+            makeRequest(options, table)
+            return   
+        }
+      }
+    }
+    io.resume()
+  }
+
+  /* list jobs */
+
+  function listJobs(json) {
+    let stripped = setOutStrip(! getOutStrip() && ! process.stdout.isTTY)
+    function listJobsUsing(out) {
+      if ( reportJson && reportJson.submittedJobs ) 
+      if ( reportJson.submittedJobs.length > 0 ) {
+        let j = reportJson.submittedJobs.length, sp = '  '
+        out(MSG + 'Order'.padEnd(7, ' ') + 'Job Name'.padEnd(10, ' ') + 'Job Id'.padEnd(10, '  ') + 'Format'.padEnd(10, ' ') + 'Length'.padEnd(8, ' ') + 'Subsystem'.padEnd(11, ' ') + 'Submission Time' + RESET)
+        out(DEFAULT + '-----'.padEnd(7, ' ') + '--------'.padEnd(10, ' ') + '--------'.padEnd(10, '  ') + '--------'.padEnd(10, ' ') + '------'.padEnd(8, ' ') + '---------'.padEnd(11, ' ') + '----------------' + RESET)
+        reportJson.submittedJobs.slice().reverse().forEach((job) => {
+          out((j--).toString().padStart(5, ' ') + RESET + sp + job.jobName.padEnd(10, ' ') + job.jobId.padEnd(10, ' ') + job.recordFormat.padEnd(10, ' ') + DEFAULT + job.recordLength.toString().padStart(6, ' ') + sp + RESET + job.subsystem.padEnd(11, ' ') + INFO + (new Date(job.timeStamp) + RESET))
+        })  
+      }
+      else
+        out('No jobs recorded.')
+    }
+    stripped && listJobsUsing(ansiErrOut)
+    listJobsUsing(ansiLogOut)
+    stripped && setOutStrip(false)
+  }
+
+  /* list columns */
+
+  function listColumns(json) {
+    let stripped = setOutStrip(! getOutStrip() && ! process.stdout.isTTY)
+    function listColumnsUsing(o) {
+      if ( reportJson && reportJson.columns ) {
+        var maxTitleLength = 10;
+        var maxNameLength = 10
+        var maxDetailLength = 6
+        var maxWidthLength = 6
+        if ( json.columns.length == 0 )
+          o.out(ERROR + 'To list columns for ' + ITEM + json.function.functionName + ERROR + ', your selection criteria must display at least one row in that table.' + RESET)
+        else {
+            json.columns[0].forEach((col, i, cols) => {
+              maxTitleLength = Math.max(maxTitleLength, col.columnTitle.length + (col.titleSubscript != 0 ? 3 : 0))
+              maxNameLength = Math.max(maxNameLength, col.columnName.length)
+          })
+          o.out(MSG + 
+                    ('Title     ' + ' '.repeat(maxTitleLength)) .substring(0, maxTitleLength + 2) 
+                  + ('Column   '  + ' '.repeat(maxNameLength))  .substring(0, maxNameLength + 2) 
+                  + ('Width'      + ' '.repeat(maxWidthLength)) .substring(0, maxWidthLength + 2)
+                  + ('Detail'     + ' '.repeat(maxDetailLength)).substring(0, maxDetailLength + 2)
+                  + ' (' + json.function.functionName + ')' + RESET)
+          o.out(DEFAULT + 
+                    '-'.repeat(maxTitleLength) + '  ' 
+                  + '-'.repeat(maxNameLength) + '  ' 
+                  + '-'.repeat(maxWidthLength) + '  ' 
+                  + '-'.repeat(maxDetailLength) + RESET)
+          json.columns[0].forEach((col, i, cols) => {
+            o.out((col.columnTitle 
+              + (col.titleSubscript == 0 ? '' : ('(' + col.titleSubscript + ')')) + ' '.repeat(maxTitleLength)).substring(0, maxTitleLength + 2) 
+              + (col.columnName + ' '.repeat(maxNameLength)).substring(0, maxNameLength + 2) 
+              + (col.arrangedWidth == 0 ? (HILITE + 'hidden  ' + RESET) : (DEFAULT + col.arrangedWidth.toString().padStart(6, ' ') + RESET + '  ')) 
+              + (col.isMaximumDetail ? HILITE + 'max' + RESET : '') )
+          })
+          o.showInfo && o.out(INFO + 'If a ' + MSG + 'Title' + INFO + ' has a subscript, use a ' + MSG + 'Column' + INFO + ' for ease of typing.' + RESET)
+          o.showInfo && o.out(INFO + 'Names are case-insensitive and titles may be unambiguously abbreviated,' + RESET)
+          o.showInfo && o.out(INFO + 'however, titles are matched before columns.' + RESET)
+          showHiddenColumns && o.out()
+        }
+      }
+      else 
+        o.out(ERROR + 'This display does not support columns.' + RESET)
+    }
+    stripped && listColumnsUsing({out: ansiLogOut})
+    listColumnsUsing({out: ansiErrOut, showInfo: true})
+    stripped && setOutStrip(false)
+  }
+
+  /* list from line commands */
+
+  function listFromLineCommands(json) {
+    let stripped = setOutStrip(! getOutStrip() && ! process.stdout.isTTY)
+    function listFromLineCommandsUsing(out) {
+      var count = 0;
+      out == ansiErrOut && ansiErrOut('')
+      out(MSG +              ' Command  Description                Next Display        Note                   ' + ' (' + json.function.functionName + ')' + RESET)
+      out(DEFAULT +          ' -------  -------------------------  ------------------  ---------------------' + RESET)
+      if ( json.function && json.function.functionName != 'ENTRY' && json.function.functionName != 'MENU')
+        if ( json.lineCommands && json.lineCommands.length > 0 ) {
+            json.lineCommands.forEach((list, i, msgs) => {
+              let item = (list.command.toLowerCase() + ' '.repeat(9)).substring(0, 9)
+              let description = ((list.description.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([A-Z])([A-Z][a-z])/g, '$1 $2').replace(/([1-9])([A-Z][a-z])/g, '$1 $2')) + ' '.repeat(27)).substring(0, 27)
+              let next = (list.type == 'systemcommand' ? ' ' : list.type == 'unknown' ? (HILITE + 'Fixed-width dialog' + RESET + DEFAULT) : list.type == 'browser' ? 'Browser' : 'Tabular') + ' '.repeat(19).substring(0, 19)
+              let note = list.type == 'systemcommand' ? 'Issues system command' : ''
+              out(' ' + item + DEFAULT + description  + next + note + RESET)
+              count++
+            })
+          }
+      if ( count == 0 )
+        out(DEFAULT + ' ************************* No Line Commands Available ************************' + RESET)
+      out == ansiErrOut && ansiErrOut('')
+    }
+    stripped && listFromLineCommandsUsing(ansiErrOut)
+    listFromLineCommandsUsing(ansiLogOut)
+    stripped && setOutStrip(false)
+  }
+
+  function listState() {
+    let stripped = setOutStrip(! getOutStrip() && ! process.stdout.isTTY)
+    function listStateUsing(out) {
+      var inactive = '<not logged on>'
+      if ( loggedOn ) {
+        let time = ((new Date()).valueOf() - keepAlive.lastKeypress) / 60000.0 // Time in minutes
+        let minutes = Math.floor(time)
+        let hours = minutes < 60 ? 0 : Math.floor(minutes / 60 )
+        hours > 0 && (minutes = minutes - (hours * 60))
+        hours > 0 && (time -= hours * 60)
+        let seconds = Math.floor((time - minutes) * 60)
+        hours > 0 && (minutes = minutes.toString().padStart(2, '0'))
+        inactive = (hours > 0 ? hours + ':' : '') + minutes + ':' + seconds.toString().padStart(2, '0') + DEFAULT + (hours ? ' hh:mm:ss' : ' mm:ss')
+      }
+      if ( resumeData ) { 
+        let x = resumeData.cookie.match(/EJES.*?\=([A-F0-9]{7,}).*/)
+        x && x[1] && (resumeData.cookie = resumeData.cookie.replace(x[1], (x[1].substr(0, 6) + '...')))
+      }
+      out == ansiErrOut && ansiErrOut('')
+      out(MSG +              ' State                  Description                    Value                                  ' + RESET)
+      out(DEFAULT +          ' -------                -----------------------------  ---------------------------------------' + RESET)
+      out(                   ' _BPX_TERMPATH          OMVS indicator                 ' + ITEM + (process.env._BPX_TERMPATH ? HILITE + process.env._BPX_TERMPATH : ITEM + '<not set>') + RESET)
+      out(                   ' autoupdate             Append UPDATE to commands      ' + ITEM + (autoupdate ? 'on' : 'off') + RESET)
+      out(                   ' basePath (profile)     Server URL path component      ' + ITEM + ejes.basePath + RESET)
+      out(                   ' blanks                 Show blank lines in stderr     ' + ITEM + (blanks ? 'on' : 'off') + RESET)
+      out(                   ' beep (EJES_BEEP)       Beep on errors or host alarms  ' + ITEM + (alarm ? 'on' : 'off') + RESET)
+      out(                   ' browser                In browser for the pg command? ' + ITEM + (inBrowser ? 'yes' : 'no') + RESET)
+      out(                   ' bottom                 Browser or tabular at bottom   ' + ITEM + (atBottom ? 'yes' : 'no') + RESET)
+      out(                   ' cpu archecture         CPU architecture               ' + ITEM + os.arch() + RESET)
+      out(                   ' debug                  Technical support setting      ' + (debug > 0 ? DEBUG : INFO) + debug + RESET)
+      out(                   ' echo                   Send output to stdout          ' + ITEM + (echo == 'on' ? HILITE : INFO) + echo + RESET)
+      out(                   ' EJES_AUTORESUME        Auto-resume on pin "auto"      ' + ITEM + (autoResume ? 'on' : 'off') + RESET)
+      out(                   ' EJES_DOWNLOAD_PATH     Path to save PDF downloads     ' + ITEM + (downloadPath ? downloadPath : HILITE + '<not set> ' + ITEM + 'Current working directory: ' + DEFAULT + __dirname) + RESET)
+      out(                   ' EJES_DOWNLOAD_TIMEOUT  Path to save PDF downloads     ' + ITEM + (downloadTimeout / 1000) + ' seconds' + RESET)
+      out(                   ' EJES_SUBMIT_PATH       Path to JCL folder             ' + ITEM + (submitPath ? submitPath : HILITE + '<not set> ' + ITEM + 'Current working directory: ' + DEFAULT + __dirname) + RESET)
+      out(                   ' FORCE_COLOR            Stardard color depth limit     ' + ITEM + (process.env.FORCE_COLOR ? HILITE + process.env.FORCE_COLOR : INFO + '<not set>') + RESET)
+      out(                   ' full URL (profile)     Host server URL component      ' + DEFAULT + (ejes.hostname? ejes.hostname : 'not configured') + INFO + ':' + DEFAULT + (ejes.port ? ejes.port + ejes.basePath : 'not configured') + RESET)
+      out(                   ' hostname (profile)     Host server URL component      ' + ITEM + ejes.hostname + RESET)
+      out(                   ' inactive               Time since last host command   ' + ITEM + (loggedOn ? inactive : '<not logged on>') + RESET)
+      out(                   ' lastFunctionName       Last display received          ' + ITEM + (lastFunctionName ? lastFunctionName : '<none>') + RESET)      
+      out(                   ' lastFunctionType       Last display type received     ' + ITEM + (lastFunctionType ? lastFunctionType : '<none>') + RESET)      
+      out(                   ' inactivity             Logoff afer inactivity         ' + ITEM + keepAlive.maxMinutes + ':00' + RESET)
+      out(                   ' mode                   Run mode                       ' + ITEM + (isPureNode() ? 'Pure node' : 'Zowe') + RESET)
+      out(                   ' NO_COLOR               Proposed stardard setting      ' + ITEM + (process.env.NO_COLOR ? HILITE + 'on' : INFO + '<not set>') + RESET)
+      out(                   ' no color stdout        Color stripped from stdout     ' + ITEM + (getOutStrip() ? 'yes' : 'no') + RESET)
+      out(                   ' no color stderr        Color stripped from stdout     ' + ITEM + (getErrStrip() ? 'yes' : 'no') + RESET)
+      out(                   ' os platform            Operating system platform      ' + ITEM + os.platform() + RESET)
+      out(                   ' os release             Operating system release       ' + ITEM + os.release() + RESET)
+      out(                   ' os platform            Operating system type          ' + ITEM + os.type() + RESET)
+      out(                   ' pg                     No command on pressing Enter   ' + ITEM + pagingCommand + RESET)
+      out(                   ' port (profile)         Port server URL component      ' + ITEM + ejes.port + RESET)
+      out(                   ' profile name           Profile in use                 ' + ITEM + (profileName || '<not available>') + RESET)
+      out(                   ' profile path           Path to profile                ' + ITEM + (ejes.profile || '<not available>') + RESET)
+      out(                   ' profile type           Type of profile being used     ' + ITEM + (ejes.useZoweProfile != 'no' || ejes.zowe ? 'Zowe profile' : 'EJES CLI maintained profile') + RESET)
+      out(                   ' quiet                  Mute inactive info messages    ' + ITEM + (quietPlease ? HILITE + 'on' : 'off') + RESET)
+      out(                   ' resume data object     Data used to resume session    ' + ITEM + (resumeData ? ('See below\n' + RESET + util.inspect(resumeData, { depth: 10, colors: true, compact: true, breakLength: Infinity})): 'This session was not resumed.' + RESET))
+      out(                   ' redirected stderr      Stderr is redirected           ' + ITEM + (process.stderr.isTTY ? INFO + 'no' : HILITE + 'yes') + RESET)
+      out(                   ' redirected stdin       Stdin is redirected            ' + ITEM + (process.stdin.isTTY ? INFO + 'no' : HILITE + 'yes') + RESET)
+      out(                   ' redirected stdout      Stdout is redirected           ' + ITEM + (process.stdout.isTTY ? INFO + 'no' : HILITE + 'yes') + RESET)
+      out(                   ' ru (profile)           Reject unauthorized certs      ' + ITEM + (ejes.rejectUnauthorized ? INFO : ERROR) + ejes.rejectUnauthorized + RESET)
+      out(                   ' rowkeys                Display row keys in download   ' + ITEM + (rowkeys ? 'on' : 'off') + RESET)
+      out(                   ' scheme                 Color scheme in use            ' + ITEM + scheme + RESET)
+      out(                   ' screen                 Send output to stderr          ' + ITEM + (screen ? HILITE + 'on' : INFO + 'off') + RESET)
+      out(                   ' strip                  Strip host attributes          ' + ITEM + (stripHostAttributes ? 'on' : 'off') + RESET)
+      out(                   ' terminal size          Host terminal dimensions       ' + ITEM  + rows + DEFAULT + 'x' + ITEM + cols + RESET)
+      out(                   ' tabular                In tabular for the pg command? ' + ITEM + (inTabular ? 'yes' : 'no') + RESET)
+      out(                   ' user                   Logged on user                 ' + ITEM + (loggedOn && ejes.loggedOnUser ? ejes.loggedOnUser : '<not logged on>') + RESET)
+      out(                   ' version                Version of EJES Batch          ' + ITEM + ejesVersion + RESET)
+      out == ansiErrOut && ansiErrOut('')
+    }
+    stripped && listStateUsing(ansiErrOut)
+    listStateUsing(ansiLogOut)
+    stripped && setOutStrip(false)
+  }
+
+  /* Check response statuses and start logoff if necessary.
+     NOTE: Returns to caller if logged on.  Caller must handle this. 
+  */
+
+  function statusCheckExit(json, res) {
+    if ( json ) {
+      if ( json.status != responseOkay_200 ) {
+        switch(process.exitCode = (json.status || res.statusCode)) {
+          case 500: ansiErrOut(ERROR + 'Host session terminated with status 500.' + RESET); 
+                    if ( json.statusMessage == '"Internal Server Error"' )
+                      ansiErrOut(INFO + 'This is a normal result if you used the host command ' + ITEM + 'END' + INFO +  ' or '  + ITEM + 'RETURN' + INFO + ' to exit your session.' + RESET)
+                    break;
+          case 400: ansiErrOut(json)
+                    ansiErrOut(ERROR + 'Bad request #' + HILITE + options.request + ERROR + ' follows:' + ITEM + ' (hint: check path)' + RESET)
+                    ansiErrOut(options)
+                    delete options.path
+                    break;
+          case 401: ansiErrOut(ERROR + 'Unauthorized for transaction.' + RESET)
+                    ansiErrOut(INFO + 'The server may also have timed-out your session or was cancelled.  Run CLI again.' + RESET)
+                    if ( resumeData ) 
+                      ansiErrOut(MSG + 'Pause limited to 2 minutes.  ' + INFO + 'Pin: ' + ITEM + resumeData.pin + INFO + '  Resumed at: ' + ITEM + resumeData.resumedAt + INFO + '  Paused at: ' + ITEM + resumeData.pausedAt + RESET)
+                    else
+                      ansiErrOut(INFO + 'Consider using the ' + ITEM + '--inactivity' + INFO + ' option.' + RESET)
+                    break;
+          default:  ansiErrOut(ERROR + 'Unexpected RESTApi return status of ' + ITEM + (json.status || res.statusCode) + ERROR + ' with message: "' + ITEM + (json.statusMessage || res.statusMessage) + ERROR + '"' + RESET)
+                    ansiErrOut(util.inspect(json, true, 10, true))
+                    
+        }
+        download.InterruptCleanup()
+        term.logoff()    // Terminate required for host clean-up, and it won't hurt if there's no connection.
+        return true
+      }
+    }
+  }
+
+  /* report */
+
+  var atBottom = false
+  var inTabular = false
+  var inBrowser = false
+  var lastFunctionName = ''
+  var lastFunctionType = ''
+  var pagingCommand = 'down p'
+  function report(res, data) {
+    debug & d_BatchTracing && ansiErrOut(DEBUG + 'report' + RESET)
+
+    if ( options.post && options.post.platformEncoding )
+      delete options.post.platformEncoding
+    if ( options.post && options.post.execParms ) {
+      options.post.execParms.enumValue = rows
+      options.post.execParms.command = ''
+    }
+    if (res.headers['content-type'] == 'text/plain') {
+      ansiLogOut(data)  // Report is type text.
+      return
+    }
+
+    var json = reportJson = JSONparse(data, 'report')
+    atBottom = inTabular = inBrowser = false
+
+    if ( json ) { // Gotta be JSON or nothing to do.
+      let hideExtra = (echo == 'on' && process.stdout.isTTY) || screen
+      ansiErrOut(INFO + json.status + ' ' + ITEM +  json.statusMessage + ' ' + (json.elapsed ? json.elapsed : '') + (' ' + fileSizeSI(data.length) + ' ') + (! hideExtra ? ' ' + INFO + (json.function ? json.function.functionType : '') : '')  + RESET)
+      if ( statusCheckExit (json, res) )
+        return
+      if ( ! json.function || json.function.functionName != lastFunctionName )
+        pagingCommand = 'down p'
+
+      lastFunctionName = json.function && json.function.functionName ? json.function.functionName : ''
+      lastFunctionType = json.function && json.function.functionType ? json.function.functionType : ''
+      if ( json.screen && json.screen.screenImage && json.screen.screenImage.length > 0 ) {
+        let msgWasOutput = false
+        let logattr =  ! noColor && ! forceNoColor && json.function && json.function.functionName == 'OPERLOG' && json.notice.optionNotices.some((item) => { return (item == 'LogAttr=ON')})
+        const spectrum = {
+          blue:   { high: '45',  low: '111'  },
+          red:    { high: '9',   low: '160'  },
+          pink:   { high: '224', low: '217'  },
+          green:  { high: '10',  low: '28'   },
+          cyan:   { high: '14',  low: '43'   },
+          yellow: { high: '11',  low: '221'  },
+          white:  { high: '15',  low: '252'  },
+          black:  { high: '255', low: '250'  },
+        } 
+        let dataLine
+        let maxLine
+        let beep = false
+        let beeped = false
+        let browserDataLine
+        let tabularDataLine
+        let bottomLine
+        let commandLine
+        let logAttrSkipped = screen // By definition, if screen isn't displayed, it is skipped.
+        if ( screen ) // Is the meta command SCREEN set to ON?
+          json.screen.screenImage.forEach((line, lineNo) => { 
+            //let l = lineTo3270Color(line)
+            let l = line.join('');
+            //if ( lineNo == 4 ) { line.forEach((c, nbr)=>{ if ( nbr > 125 ) { ansiLogOut('nbr: ' + nbr + ', code: ' + c.charCodeAt(0) + ' "' + c + '"') }})} // Save for attr diagnoisis
+            l = l.replace(/\t/g,     HILITE3270 + ' ')    // Bright Yellow
+            l = l.replace(/\u0000/g, ' ')                 // Empty field character, not an attribute.  Substitute a space only..
+            l = l.replace(/\u0001/g, ERRORS3270 + ' ')    // Bright Red
+            l = l.replace(/\u0002/g, ISTEXT3270 + ' ')    // Normal Cyan
+            l = l.replace(/\u0003/g, ACTIVE3270 + ' ')    // Bright White
+            l = l.replace(/\u0004/g, PARAMS3270 + ' ')    // Not used?  If unknown PURPLE data in table if shows up, find on 3270 and assign proper color
+            l = l.replace(/\u0005/g, UNDISC3270 + '5')    // Undiscovered - Purple - Doesn't seem to be used.
+            l = l.replace(/\u0006/g, MSGHDR3270 + ' ')    // Bright Cyan
+            l = l.replace(/\u0007/g, FILTER3270 + ' ')    // Filter hilite color
+            l = l.replace(/\u0008/g, INMENU3270 + ' ')    // Normal White (gray)
+            // NOTE: If unknown 3270 attributes appear, download the display and look in notepad++
+            //       which visualizes the control characters, then cross-reference using:
+            //       https://en.wikipedia.org/wiki/C0_and_C1_control_codes
+            let strippedLine = line.join('').replace(/[\t|\u0000|\u0001|\u0002|\u0003|\u0004|\u0005|\u0006|\u0007|\u0008]/g, ' ')  // Windowed version of full line
+            if ( logattr ) {
+              if ( ! dataLine && (json.lines.length && json.lines[0].replace(/[\t|\u0000|\u0001|\u0002|\u0003|\u0004|\u0005|\u0006|\u0007|\u0008]/g, ' ').toLowerCase().substr(0, strippedLine.length).trim().indexOf(strippedLine.toLowerCase().trim()) != -1 || inBrowser)) {
+                dataLine = 0
+                maxLine = json.lines.length
+              }
+              else if ( ! dataLine && lineNo == 3 ) {
+                // No match
+              }
+            }
+            if ( /\*\* Bottom of Data \*\*/.test(strippedLine) ) {
+              atBottom = true
+              bottomLine = lineNo - 1
+            }
+            if ( /Command ===>/.test(strippedLine) ) 
+              commandLine = lineNo
+            if ( ! browserDataLine && strippedLine.trim() && !/[^ \-+0123456789><]/.test(strippedLine) ){
+              inBrowser = true
+              browserDataLine = lineNo + 1
+            }
+            if ( ! tabularDataLine && strippedLine.trim() && !/[^ -\/><^V]/.test(strippedLine) ){
+              inTabular = true
+              tabularDataLine = lineNo + 1
+            }
+            if ( dataLine != undefined && dataLine < maxLine ) {
+              if ( l.startsWith('\x1b') ) {
+                dataLine = undefined
+              }
+              else {
+                logAttrSkipped = false
+                let loginfo = json.loginfo[dataLine++]
+                if ( logattr && dataLine ) {
+                  l = line.join('').replace(/\u0003/g, ' ' + HardReset + FgBlack + '\x1b[' + '48' + ';5;' + spectrum['white']['high'] + 'm').replace(/\u0002/g, HardReset + (loginfo.highlight == 'reverse' ? FgBlack : '') + '\x1b[' + (loginfo.highlight == 'reverse' ? '48' : '38') + ';5;' + spectrum[loginfo.color][loginfo.intensity] + 'm ' )
+                }
+                l = HardReset + (loginfo.highlight == 'reverse' ? FgBlack : '') + '\x1b[' + (loginfo.highlight == 'reverse' ? '48' : '38') + ';5;' + spectrum[loginfo.color][loginfo.intensity] + 'm' + l + HardReset + RESET
+                beep = alarm && ! beeped  && ! getErrStrip() && loginfo.control == 'alarm'
+              }
+            }
+            rownum = (debug & d_Testing) ? lineNo.toString().padStart(3, '0') : ''
+            let sound = ''
+            if ( beep ) {
+              beeped = true
+              sound = '\u0007'
+            }
+            if ( lineNo + 2 == json.screen.screenImage.length )
+              msgWasOutput = undefined != listError(json) // Errors are displayed and don't cause CLI to quit.
+            if ( msgWasOutput )
+              msgWasOutput = false
+            else if ( blanks ) 
+              ansiErrOut( rownum + l + sound)
+            else if ( l.trim() )
+              ansiErrOut(rownum + l + sound)
+            if (lineNo + 1 == json.screen.screenImage.length)
+              ansiErrOut(RESET)
+          })
+        else // SCREEN is not ON.
+          listError(json)
+        if ( logAttrSkipped && logattr ) { // Self-diagnostic.  Expected to output color but always skipped.
+          if ( json.lines.length == 0 ) {
+            ansiLogOut(HILITE + 'Expected json.lines, but got none!  ' + ERROR + ' + json.lines.length=' + ITEM + json.lines.length + RESET)
+            ansiLogOut(MSG + options.query + RESET)
+            ansiLogOut(DEBUG + 'json.loginfo.length=' + ITEM + json.loginfo.length + RESET)
+          }
+          else {
+          json.screen.screenImage.forEach((line, lineNo) => { 
+//          let l = lineTo3270Color(line)
+            let l = line.join('');
+            //if ( lineNo == 4 ) { line.forEach((c, nbr)=>{ if ( nbr > 125 ) { ansiLogOut('nbr: ' + nbr + ', code: ' + c.charCodeAt(0) + ' "' + c + '"') }})} // Attr diagnoisis
+            l = l.replace(/\t/g,     HILITE3270 + ' ')    // Bright Yellow
+            l = l.replace(/\u0000/g, ' ')                 // Empty field character, not an attribute.  Substitute a space only..
+            l = l.replace(/\u0001/g, ERRORS3270 + ' ')    // Bright Red
+            l = l.replace(/\u0002/g, ISTEXT3270 + ' ')    // Normal Cyan
+            l = l.replace(/\u0003/g, ACTIVE3270 + ' ')    // Bright White
+            l = l.replace(/\u0004/g, PARAMS3270 + ' ')    // Not used?  If unknown PURPLE data in table if shows up, find on 3270 and assign proper color
+            l = l.replace(/\u0005/g, UNDISC3270 + '5')    // Undiscovered - Purple - Doesn't seem to be used.
+            l = l.replace(/\u0006/g, MSGHDR3270 + ' ')    // Bright Cyan
+            l = l.replace(/\u0007/g, FILTER3270 + ' ')    // Filter hilite color
+            l = l.replace(/\u0008/g, INMENU3270 + ' ')    // Normal White (gray)
+            ansiLogOut(l + HardReset + RESET)
+            ansiLogOut('Screen image ' + lineNo + ': ' + util.inspect(line, { depth: 10, colors: true, maxArrayLength: 300, compact: true, breakLength: Infinity}))
+          })
+          for ( let i = 0; i < json.lines.length; i++) {
+            ansiLogOut('json.lines[' + i + ']: ' + json.lines[i])
+              ansiLogOut('logInfo[' + i + ']: ' + util.inspect(json.loginfo[i], { depth: 10, colors: true, maxArrayLength: 300, compact: true, breakLength: Infinity}))
+            }
+          }
+        }
+        beep && process.stderr.write('\u0007')
+        let countOfLines
+        if ( (browserDataLine || tabularDataLine) && (bottomLine || commandLine) ) {
+          let start = browserDataLine || tabularDataLine
+          commandLine -= 2
+          let end = bottomLine || commandLine
+          countOfLines = end - start + 1
+        }
+        debug & d_Testing && browserDataLine && ansiLogOut('First browser data at line:  ' + browserDataLine)
+        debug & d_Testing && tabularDataLine && ansiLogOut('First tabular data at line:  ' + tabularDataLine)
+        debug & d_Testing && bottomLine &&      ansiLogOut('Bottom line of data at line: ' + bottomLine)
+        debug & d_Testing && commandLine &&     ansiLogOut('Command prompt at line:      ' + commandLine)
+        debug & d_Testing && countOfLines &&    ansiLogOut('Count of data lines:         ' + countOfLines)
+        
+        msgWasOutput = false;
+        if ( echo == 'on' ) {
+          if ( ! screen )
+            if ( json.function && json.function.functionType ) {
+              inTabular = json.function.functionType == 'tabular'
+              inBrowser = json.function.functionType == 'browser'
+            }
+          json.screen.screenImage.forEach((line, lineNo) => {
+            let l = line.join('')
+            let strippedLine = l.replace(/[\t\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\u0008]/g,' ')
+            stripHostAttributes && (l = strippedLine)
+            if ( ! screen &&  /\*\* Bottom of Data \*\*/.test(strippedLine) )
+              atBottom = true
+            if ( lineNo + 2 == json.screen.screenImage.length ) {
+              msgWasOutput = undefined != listError(json, ansiLogOut) // Errors are displayed and don't cause CLI to quit.
+            }
+            if ( msgWasOutput )
+              msgWasOutput = false
+            else
+              ansiLogOut(l)
+          })
+        }
+        else if ( ! screen ) { // Neither SCREEN nor ECHO is on, but we need to track bottom and display type.
+          if ( json.function && json.function.functionType ) {  // Should always be true, but be safe.
+            inTabular = json.function.functionType == 'tabular'
+            inBrowser = json.function.functionType == 'browser'
+          }
+          json.screen.screenImage.forEach((line, lineNo) => {
+            if ( ! atBottom )
+              if ( /\*\* Bottom of Data \*\*/.test(line.join('').replace(/[\t\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\u0008]/g,' ')) )
+                atBottom = true
+          })
+        }
+      }
+      }
+    io.resume()
+  }
+
+  /* Build Auto-update cmdstack - Ensure one and only one update at the end of the command stack. */
+
+  function buildautoupdate(text) {
+    if ( autoupdate && text && text.length > 0 && ! text.toLowerCase().endsWith('update') )
+      text += ';update'
+    return text
+  }
+
+  /* hostQueury - Handle starting queries to the host, including logging on and logged on differences. */
+
+  function hostQuery(input, pgNotify = true, commandData = undefined) {
+    debug & d_HostCmds && ansiErrOut (DEBUG + 'input="' + input + '", inTabular=' + inTabular + ', inBrowser=' + inBrowser + ', atBottom=' + atBottom + ', pagingCommand=' + ITEM + pagingCommand + RESET)
+    if ( input.length == 0 && (inTabular || inBrowser) ) {
+      debug & d_HostCmds && ansiLogOut(DEBUG + 'Modifying ' + INFO + 'hostQuery' + DEBUG + ' (input value) to avoid sending empty string command to host.' + RESET)
+      input = atBottom && /^[nd].*/i.test(pagingCommand) ? 'bottom' : pagingCommand
+      pgNotify && ansiErrOut('\x1b[1A\x1b[1A' + makePrompt() + RESET + input)
+      ansiLogOut('>' + input) // This is an on-purpose repeat of rl.on('line...  The log out is also on purpose.
+    }
+    (debug & (d_BatchTracing | d_HostCmds)) && ansiErrOut(DEBUG + 'hostQuery: ' + ITEM + input + RESET)
+    options.query = '?q=message,function,position,jobs,screen,lines,linecommands,notice,columns,loginfo,submittedJobs'
+    options.post = options.post || { execParms: { command: '', enumValue: 0} }
+    options.post.execParms.commandData && delete options.post.execParms.commandData
+    commandData && (options.post.execParms.commandData = commandData)
+    options.post.execParms.command = input
+    options.post.execParms.enumValue = rows
+    options.post.execParms.showHiddenColumns = showHiddenColumns
+    if ( loggedOn ) {
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'hostQuery: already logged on' + RESET)
+      options.path = ejes.basePath + '/exec' + options.query
+      options.post.execParms.command = buildautoupdate(options.post.execParms.command)
+      options.post.initParms && delete options.post.initParms
+      options.headers.Authorization && delete options.headers.Authorization
+    }
+    else { // logging on
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'hostQuery: logging on' + RESET)
+      options.path = ejes.basePath + '/init' + options.query
+      options.post.platformEncoding = '1047'
+      options.hostname = ejes.hostname
+      options.port = ejes.port
+      options.rejectUnauthorized = ejes.rejectUnauthorized
+      options.headers.Authorization = 'Basic ' + ejes.auth
+      options.post.initParms.enumValue = 0
+      options.post.execParms.command = buildautoupdate(options.post.execParms.command)
+    }
+  makeRequest(options, report)
+  }
+
+  /* Keep alive object */
+
+  const keepAlive = { // Object that handles keep alive (inactivity timer) for Ejes Batch by sending NOPs to host.
+
+    maxMinutes: 5,
+    lastKeypress: (new Date()).valueOf(),
+    timer: undefined,
+    INTERVAL: 60000,
+    RETRY:1000,
+    request: {
+      hostname: '',
+      port: '',
+      method: 'POST',
+      rejectUnauthorized: true,
+      path: '',
+      headers: { 
+        Cookie: '' 
+      },
+      post: { 
+        execParms: {
+          enumValue: 0,
+          command: 'nop'
+        }
+      },
+      query: ''
+    },
+
+    resetTimer: () => {
+      let now = (new Date()).valueOf()
+      keepAlive.timer && clearTimeout(keepAlive.timer)
+      keepAlive.timer = setTimeout(keepAlive.handler, keepAlive.INTERVAL)
+      debug & d_BatchKeepAlive && ansiErrOut(DEBUG + 'keepAlive.resetTimer: Setting actual timer at ' + MSG + getClientDateStamp() + DEBUG + '\nBase: ' + ITEM + keepAlive.lastKeypress + DEBUG + ', now: ' + ITEM + now + DEBUG + ', difference: ' + ITEM + (now - keepAlive.lastKeypress) / 60000.0 + ' minutes.' + RESET)
+    },
+
+    setTimer: () => {
+      keepAlive.lastKeypress = (new Date()).valueOf() 
+      debug & d_BatchKeepAlive && ansiErrOut(DEBUG + 'keepAlive.setTimer: Setting base to: ' + ITEM + keepAlive.lastKeypress + RESET)
+      keepAlive.resetTimer()
+    },
+
+    handler: () => {
+      clearTimeout(keepAlive.timer)
+      if ( ! loggedOn ) {
+        debug & d_BatchKeepAlive && ansiErrOut(DEBUG + 'keepAlive.handler: Not logged on.  Keep alive unnecessary.' + RESET)
+        keepAlive.setTimer()
+        return
+      }
+      if ( io.inputPaused ) {
+        debug & d_BatchKeepAlive && ansiErrOut(DEBUG + 'keepAlive.handler: io.inputPaused' + RESET)
+        keepAlive.timer = setTimeout(keepAlive.handler, keepAlive.RETRY)
+      }
+      else {
+        var diff = (((new Date()).valueOf()) - keepAlive.lastKeypress) / 60100 // ms  // Includes fudge to handle length of code execution.
+        if ( (diff + .01) > keepAlive.maxMinutes ) { // Session Expired?  // Correction for round-off of timing.
+          process.exitCode = 86
+          ansiErrOut(ERROR + 'Session expired.  Host inactivity timeout set at ' + ITEM + keepAlive.maxMinutes + ERROR + ' minutes.  Type ' + ITEM + 'Help inactivity' + ERROR + ' for help on how to control that.' + RESET)
+          term.logoff()
+          return
+        }
+        keepAliveInProgress = true
+        keepAlive.timer = undefined
+        keepAlive.request.path = ejes.basePath + '/exec'
+        keepAlive.request.hostname = ejes.hostname;
+        keepAlive.request.port = ejes.port
+        keepAlive.request.rejectUnauthorized = ejes.rejectUnauthorized
+        keepAlive.request.headers.Cookie = cookie
+        if ( diff < (keepAlive.maxMinutes - 2) ) { // Make a request only if during the keep alive period, else let time out.
+          keepAlive.request.request = ++options.request
+          if ( debug & d_RequestAndQuery ) {
+            keepAlive.request.clientDateStamp = getClientDateStamp()
+            ansiErrOut(INFO + "Request " + ITEM + options.request + INFO + ": " + RESET)
+            ansiErrOut(RESET + util.inspect(keepAlive.request, true, 10, true) + RESET)
+          }
+          https.request(keepAlive.request, (res) => {
+            if ( debug & d_ResponseHeaders ) {
+              keepAlive.request.clientDateStamp = getClientDateStamp()
+              ansiErrOut(INFO + "Response to request " + ITEM + keepAlive.request.request + INFO + ": " + RESET)
+              ansiErrOut(RESET + util.inspect(res.headers, true, 10, true)  + RESET)
+            }
+            res.on('data', () => {}) 
+            res.on('end', () => { 
+              debug & d_BatchKeepAlive && ansiErrOut(DEBUG + 'keepAlive.handler: nop completed.  Timer reset.' + RESET)
+              keepAlive.resetTimer()
+            })
+          })
+          .on('error', (e) => {
+            debug & d_ResponseHeaders && ansiErrOut('Client date stamp: ' + getClientDateStamp())
+            ansiErrOut(ERROR + '\n' + e + RESET)
+            term.logoff() // This is assuming that an error response to a NOP is fatal.  This may need to be changed.
+          })
+          .end(() => {debug & d_BatchKeepAlive && ansiErrOut(DEBUG + 'keepAlive.handler: Requesting nop' + RESET) })
+        }
+        else {
+          keepAlive.resetTimer()
+          debug & d_BatchKeepAlive && ansiErrOut(DEBUG + 'keepAlive.handler: maxMinutes expired.  Not sending keepAlive.' + RESET)
+        }
+      }
+    }
+  }
+
+  /* System keyboard I/O management object. */
+  
+  const io = {
+    rlClosed: false,
+    inputPaused: false,
+    inputBuffer: [],
+    closeRequested: false,
+    redirected: false,
+    wasRedirected: false,
+    cmdlineInput: [],
+    index: 0,
+
+    isInputBuffered: () => { return io.inputBuffer.length > 0 },
+    isInputPaused: () => { return io.inputPaused },
+
+    start: () => {
+      io.wasRedirected = io.redirected = ! process.stdin.isTTY
+    },
+    
+    ready: (input) => {
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.ready: ' + RESET)
+      if ( io.redirected ) {
+        io.inputBuffer.push(input)
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.ready: Input paused, using timeout; input pushed: ' + ITEM + input + RESET)
+        return
+      }
+    return true
+    },
+
+    readyUpdateClosed: () => {
+      debug & d_BatchTracing && io.redirected && ansiErrOut(DEBUG + 'io.readyUpdateClosed: Lines buffered: ' + io.inputBuffer.length + RESET)
+      io.redirected = false
+    },
+
+    readyCommandLine: () => {
+      if ( io.cmdlineInput.length > 0 ) {
+        io.cmdlineInput.forEach((line) => {
+          io.inputBuffer.push(line)
+          debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.ready: Command line switch; input pushed: ' + ITEM + line + RESET)
+          }
+        )
+        io.cmdlineInput = []
+        io.resume()
+      }
+    },
+
+    pushBufferInput: (line) => {
+      io.cmdlineInput.push(line)
+    },
+
+    unshiftInputBuffer: (input) => {
+      io.inputBuffer.unshift(input)
+    }, 
+
+    autoRunRegister: () => {
+      var ioBufferEmpty = io.cmdlineInput.length == 0
+      if ( ! register[11].startsWith('#') && process.stdin.isTTY )
+        if ( ioBufferEmpty )
+          io.pushBufferInput(register[11].trim())
+        else
+          io.cmdlineInput[0] = register[11].trim() + ';' + io.cmdlineInput[0]
+      if ( ! register[10].startsWith('#') && ioBufferEmpty && process.stdin.isTTY )
+        if ( io.cmdlineInput.length == 0 )
+          io.pushBufferInput(register[10].trim())
+        else
+          io.cmdlineInput[0] += ';' + register[10].trim()
+    },
+
+    pause: () => {
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.pause' + RESET)
+      if ( io.rlClosed ) {
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.pause: io.rlClosed is true.  Skipping pause.' + RESET)
+        return
+      }
+      io.inputPaused = true;
+      rl.setPrompt('')
+      rl.pause()
+    },
+
+    resume: (skipTimerReset) => {
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.resume: skipTimerReset=' + skipTimerReset + RESET)
+      if ( io.rlClosed ) {
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.resume: io.rlClosed is true.  Skipping resume.' + RESET)
+        return
+      }
+      io.inputPaused = false;
+      if ( io.isInputBuffered() ) {
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.resume: data is buffered ' + RESET + util.inspect(io.inputBuffer, true, 10, true))
+        io.next()
+        return;
+      }
+      rl.setPrompt(errColorControl(ERROR + makePrompt() + RESET))
+      rl.prompt()
+      rl.resume()
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.resume: Resuming...' + RESET)
+      if ( skipTimerReset ) {
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.resume: skipping timer reset; no host interaction occurred.' + RESET)
+      }
+      else
+        keepAlive.setTimer()
+    },
+
+    next: () => {
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.next start: ' + RESET + util.inspect(io.inputBuffer, true, 10, true))
+      if ( ! io.isInputBuffered() ) {
+        if ( io.closeRequested ) {
+          io.close()
+          return // This should cause program to close.
+        } 
+        else {
+          debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.next: io.inputbuffer empty, readline still active' + RESET)
+          // readline still active, so program will continue to get input.
+          return
+        }
+      }
+      if ( io.inputPaused ) {
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.next: input paused, using timeout.' + RESET)
+        wait.forResponse()
+        return
+      }
+      // Process the oldest line from the buffer.
+      let item = io.inputBuffer.shift()
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.next: Will now process: ' + ITEM + item + RESET)
+      lineInput(item, true)
+    },
+
+    select: (input, priority) => { // Selects stream input
+      if ( io.inputPaused ) {
+        // Input is paused but we received a line!
+        io.inputBuffer.push(input)
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.select: Input paused, using timeout; input pushed: ' + ITEM + input + RESET)
+        wait.forResponse()
+        return // Caller should not continue processing.
+      }
+      else if ( io.isInputBuffered() && ! priority) { // Not paused, buffered line?
+        io.inputBuffer.push(input);         // Push at end.
+        let item = io.inputBuffer.shift()  // Get oldest line.
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.select: Input pushed ' + ITEM + input + DEBUG + ', now processing this instead: ' + ITEM + item + RESET)
+        input = item
+      }
+      else
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.select: Now processing input: ' + ITEM + input + RESET)
+      io.pause()
+      return input // Caller should continue processing.
+    },
+    
+    close: () => {
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'io.close' + RESET)
+      if ( ! io.rlClosed ) {
+        rl.close()
+        io.rlClosed = true
+        if ( loggedOn ) {
+          ! quietPlease && ansiErrOut(RESET + 'Logging out.')
+          term.logoff()
+        }
+      }
+    }
+  }
+
+  /* Update host info with captured answers and profile it if allowed. */
+
+  const hostProfileIt = 6, hostRegularProcessing = 7
+
+  /* write registers */
+
+  function writeRegisters() {
+    var json = JSON.stringify({ register: register }, null, 2)
+    const data = new Uint8Array(Buffer.from(json));
+    let path = os.homedir() + '/.ejes/work/register'
+    try {
+      fs.writeFileSync(flagWriteable(path), data, {mode: 0x400});
+      ansiErrOut(INFO + 'Registers saved.' + RESET)
+    } catch(e) {
+      ansiErrOut(ERROR + 'Unable to write registers to ' + ITEM + path + ERROR + '.  Are directory permissions a problem?' + RESET)
+      ansiErrOut(e.message || e)
+    }
+  }
+
+  /* Read registers */
+
+  const HOME_AUTORUN =    'h - (home) auto-run command at startup if no command stack and not redirected'
+  const PREPEND_AUTORUN = 'p - (preprend) auto-run command first at startup if not redirected, regardless of command stack'
+  const REGISTER_BLANK = '# register '
+  function readRegisters() {
+    try {
+      register = fs.readFileSync(flagReadOnly(os.homedir() + '/.ejes/work/register')).toString()
+      register = JSONparse(register, 'register').register
+    }
+    catch(e){
+      register = []
+      for (let i = 0; i < 12; i++)
+        register.push(REGISTER_BLANK + (i == 10 ? HOME_AUTORUN : i == 11 ? PREPEND_AUTORUN : i))
+    }  
+  }
+
+  /* write history */
+
+  function writeHistory(o) {
+    const data = new Uint8Array(Buffer.from(JSON.stringify({ history: rl.history }, null, 2)))
+    let path = os.homedir() + '/.ejes/work/history'
+    try {
+      fs.writeFileSync(flagWriteable(path), data, {mode: 0o400});
+      (! quietPlease && ! (o && o.quiet)) && ansiErrOut('Command history saved.')
+    } catch(e) {
+      ansiErrOut(ERROR + 'Unable to write history to ' + path + ERROR + '.  Are directory permissions a problem?' + RESET)
+      ansiErrOut(e.message || e)
+    }
+  }
+
+  /* Read history */
+
+  function readHistory() {
+    let path = os.homedir() + '/.ejes/work/history'
+    try {
+      let h = fs.readFileSync(flagReadOnly(path)).toString()    
+      rl.history = JSONparse(h, 'history').history
+    }
+    catch(e){
+      ansiErrOut(INFO + 'No history available.\nHistory file does not exist: ' + ITEM + path + RESET)
+      rl.history = []
+    }  
+  }
+
+  /* write resume file */
+
+  function writeResume(o) {
+    let localPin = o.pin.toLowerCase(o.pin)
+    o.pausedAt = getClientDateStamp()
+    o.cookie = cookie
+    o.inTabular = inTabular
+    o.inBrowser = inBrowser
+    o.atBottom = atBottom
+    o.rows = rows
+    o.cols = cols
+    o.lastFunctionName = lastFunctionName
+    o.lastFunctionType = lastFunctionType
+    o.autoupdate = autoupdate
+    o.blanks = blanks
+    o.echo = echo
+    o.keepAliveMaxMinutes = keepAlive.maxMinutes
+    o.noColorStderr = getErrStrip()
+    o.noColorStdout = getOutStrip()
+    o.pagingCommand = pagingCommand
+    o.quietPlease = quietPlease
+    o.rowkeys = rowkeys
+    o.scheme = scheme
+    o.screen = screen
+    o.strip = stripHostAttributes
+
+    let text = JSON.stringify(o)
+    let path = os.homedir() + '/.ejes/work/' + localPin + '.resume'
+    try {
+      outFile(text, path);
+      (! quietPlease && ! o.quiet) && ansiErrOut(INFO + 'Resume data saved on pin "' + ITEM + localPin + INFO + '".')
+      return true
+    } catch(e) {
+      ansiErrOut(ERROR + 'Unable to write resume data to ' + ITEM + path + ERROR + '.  Are directory permissions a problem?' + RESET)
+      ansiErrOut(e.message || e)
+    }
+  }
+
+  /* Read resume file */
+
+  function readResume(o) {
+    let pin = o.pin.toLowerCase()
+    let path = os.homedir() + '/.ejes/work/' + pin + '.resume'
+    try {
+      let json = inFile(path)
+      resumeData = JSONparse(json, 'readResume')
+      resumeData.resumedAt = getClientDateStamp()
+      fs.unlinkSync(path) // Once and done file.  User must pause again.
+      ! quietPlease && ansiErrOut(MSG + 'Resuming session with pin "' + ITEM +  pin + INFO + '".  Press Enter or issue a host command to restart inactivity monitor.' + (pin == 'auto' ? (autoResume ? '\nSet EJES_AUTORESUME to ' + DEFAULT + 'off' + INFO + ' to prevent auto-resuming paused sessions.' : '\nThis pin is the default pin.') : '') + RESET)
+      return true // Caller responsible for setting the indicated states.
+    }
+    catch(e){
+      resumeData = undefined
+      if ( autoResume && pin == 'auto' )
+        return false
+      ansiErrOut(ERROR + 'No resume data available for pin "' + ITEM + pin + ERROR + '".' + RESET)
+      ansiErrOut(e.message || e)
+      term.exitNow(39, true) // Not logged on, so force exit despite terminated status.
+    }  
+  }
+
+  /* Make prompt for command line */
+
+  function makePrompt() {
+    return '(E)JES batch' + ':' + (lastFunctionName ? INFO + lastFunctionName.toLowerCase() + ERROR : '~') + ' ' + (loggedOn ? ITEM + ejes.loggedOnUser.substring(0, 1).toUpperCase() + (ejes.loggedOnUser.length > 1 ? ejes.loggedOnUser.substring(1).toLowerCase() : ' ') + ERROR : ' ?') + '> '
+  }
+
+  /* Show command line prompt and accept data. */
+
+  function prompt() {
+    if ( download.inProgress || download.tableInProgress )
+      return
+    debug & d_BatchTracing && ansiErrOut(DEBUG + 'Paused? ' + io.inputPaused + RESET)
+    if ( io.index == questions.length ) {
+      if ( noHistory ) {
+        noHistory = false
+        readHistory()
+      }
+    }
+    if ( io.index < answers.length ) {
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'prompt: logon' + RESET)
+      addendum = answers[io.index] ? (ITEM + '(' + answers[io.index] + '): ' + RESET) : ': '
+      rl.setPrompt(errColorControl(RESET + HILITE + questions[io.index] + addendum + RESET + (questions[io.index] == password ? Hidden + OBSCURE: '')))
+      noHistory = true
+      rl.prompt(true)
+    }
+    else {
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'prompt: normal' + RESET)
+      if ( ! io.inputPaused ) {
+        rl.setPrompt(errColorControl(ERROR + makePrompt() /*+ '@'*/ + RESET))
+        rl.prompt(true)
+      }
+    }
+    debug & d_BatchTracing && ansiErrOut(DEBUG + 'prompt: end' + RESET)
+  }
+
+  const wait = { // Time out waiting to ensure only one timer at a time.
+    timerReady: true,
+    number: 0,
+    forResponse: () => {
+      if ( wait.timerReady ) {
+        wait.number++
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'wait.forResponse: Beginning wait #' + HILITE + wait.number + DEBUG + '...' + RESET)
+        wait.timerReady = false
+        setTimeout(wait.handler, 500, io.next) // Try again after waiting for completion.
+      } 
+      else
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'wait.forResponse: timer not ready.  Continuing to wait #' + HILITE + wait.number + DEBUG + '...')
+    },
+    handler: (func) => {
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'wait.handler: Wait #' + HILITE + wait.number + DEBUG + ' completed.')  
+      wait.timerReady = true
+      func()
+    }
+  }
+
+  function lineInput(input, priority) {
+    debug & d_BatchTracing && ansiErrOut(DEBUG + 'lineInput: ' + ITEM + input + DEBUG + ', priority handling: ' + ITEM + (priority ? 'true' : 'false') + RESET)
+    if ( io.index > hostProfileIt )
+      if ( (input = io.select(input, priority)) == undefined )
+        return
+    debug & d_BatchTracing && ansiErrOut(DEBUG + 'lineInput: selected: ' + ITEM + input + DEBUG + ' io.index: ' + ITEM + io.index + RESET)
+    if (io.index < answers.length && input.length == 0 && answers[io.index].length > 0 ) {
+      input = answers[io.index]
+    }
+    if ( io.index < answers.length )
+      answers[io.index] = input
+
+    /* Interpret Command Stack */
+
+    let issueResume = false
+    let tracking = []
+    if ( io.index++ >= questions.length ) {
+
+      /* Once per command stack processing. */
+
+      let x, meta = input.toLowerCase().trim()
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'lineInput processing: ' + ITEM + input + RESET)
+      
+      /* ! (shell exit) */
+
+      if ( meta.startsWith('!') ) {
+        try {
+          if ( os.platform == 'win32' && meta == '!') {
+            meta = 'start cmd.exe'
+            exec('start cmd.exe')
+          }
+          else {
+            ansiErrOut(HILITE + 'Shell exit running "' + ITEM + meta.substr(1) + HILITE + '".  Output is buffered, so please wait for execution to complete.' + HardReset)
+            ansiErrOut(execSync(meta.substr(1)).toString()) 
+            ansiErrOut(HILITE + 'Shell exit complete.' + RESET + ClearLine)
+          }
+        } catch(e) {
+          ansiErrOut(HILITE + 'Shell exit error occurred.  Diagnostic follows.' + RESET + ClearLine)
+          ansiErrOut(ERROR + (e.message || e) + RESET)
+        }
+        issueResume = true
+      }
+      
+      /* Register commands */
+
+      else if ( (x = meta.match(/^@[0-9dcprsh]$|^@@[0-9hp]$/)) != null ) {
+        switch(meta[1]) {
+          case 'c': // Clear
+            register.forEach((reg, i) => {register[i] = REGISTER_BLANK + (i == 10 ? HOME_AUTORUN : i == 11 ? PREPEND_AUTORUN : i)})
+            ansiErrOut(HILITE + 'Registers cleared, but not saved.  Use @s to save.  @r to revert to last saved.' + RESET)
+            // fallthru
+          case 'd': // Display
+            register.forEach((reg, i) => { ansiErrOut((i == 10 ? 'h' : i == 11 ? 'p' : i) + ': ' + reg) })
+            break
+          case 'r': // Revert to saved
+            readRegisters()
+            register.forEach((reg, i) => { ansiErrOut((i == 10 ? 'h' : i == 11 ? 'p' : i) + ': ' + reg) })
+            break
+          case 's': // Save to disk
+            writeRegisters()
+            break
+          case '@': // Show a register for editing
+            rl.write(register[meta[2] == 'h' ? 10 : meta[2] == 'p' ? 11 : parseInt(meta[2])])
+            break
+          default: // Issue the command stack in a register
+            rl.write(register[meta[1] == 'h' ? 10 : meta[1] == 'p' ? 11 : parseInt(meta[1])] + '\n')
+          }
+        issueResume = true
+      }
+      
+      /* Store command stack in register */
+      
+      else if ( (x = meta.match(/^.*(@[0-9hp])$/)) != null ) { // Does not save to disk.  Does not work for shell (!) meta commands.
+        register[x = parseInt((x = x[1].charAt(1)) == 'h' ? '10' : x == 'p' ? 11 : x)] = meta.substring(0, meta.length - 2)
+        ansiErrOut(HILITE + 'Register ' + ITEM + (x == 10 ? ('h' + HILITE + ' (home-autorun)') : x == 'p' ? ('p' + HILITE + ' (pre-autorun)'): x) + HILITE + ' updated, but not saved.  Use @s to save.  @r to revert to last saved.' + RESET)
+        io.resume()
+      }
+      
+      /* Clear register(s) */
+      
+      else if ( (x = meta.match(/^@c[0-9hp]$/)) != null ) {  // Does not save to disk.
+        register[parseInt(x = parseInt((x = x[0].charAt(2)) == 'h' ? '10' : x == 'p' ? '11' : x))] = REGISTER_BLANK + (x == 10 ? HOME_AUTORUN : x == 11 ? PREPEND_AUTORUN : x)
+        ansiErrOut(HILITE + 'Register ' + ITEM + (x == 10 ? ('h' + HILITE + ' (home-autorun)') : x == 10 ? ('p' + HILITE + ' (pre-run)'): x) + HILITE + ' cleared, but not saved.  Use @s to save.  @r to revert to last saved.' + RESET)
+        issueResume = true
+      }
+
+      /* Interpret non-positional command stack elements. */
+
+      else {
+        let parsed = meta.split(';')
+
+        /* metaFound - Common routine for handling a found meta command. */
+        
+        function metaFound(element) { 
+          arr = parsed.slice(element)
+          if ( tracking.length ) {
+            // Caller will be told not to process found meta command
+            let revisedCommandLine = arr.join(';')
+            debug & d_BatchTracing && ansiErrOut(DEBUG + 'metaFound: Meta command found but there are host commands being tracked.  Pushing: ' + revisedCommandLine + RESET)
+            // First put out the remaining items in the array including the found meta command.
+            io.unshiftInputBuffer(revisedCommandLine)
+            // Now assemble the tracked host commands.
+            let hostCommand = tracking.join(';')
+            hostCommand = buildautoupdate(hostCommand)
+            debug & d_BatchTracing && ansiErrOut(DEBUG + 'Clearing tracking array; Gathered host command(s) being sent to host: ' + hostCommand + RESET)
+            hostQuery(hostCommand)
+            issueResume = false
+            tracking = []
+            return false // Do not process meta command.
+          }
+          // Will allow caller to process meta command and subsequent commands added to io object
+          arr.shift()
+          if ( arr.length) {
+            debug & d_BatchTracing && process.stderr.write(DEBUG + 'metaFound is pushing: ' + RESET)
+            let revisedCommandLine = arr.join(';')
+            debug & d_BatchTracing && ansiErrOut(DEBUG + revisedCommandLine + RESET)
+            io.inputBuffer.unshift(revisedCommandLine)  // TODO : Add this operation to the io object.
+          }
+          return true // Process meta command.
+        }
+
+        //! meta.startsWith('@') && ansiLogOut('>' + meta);
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'Starting parsed:              ' + RESET + util.inspect(parsed, true, 10, true))
+
+        /* Expand meta macro commands */
+
+        parsed = parsed.reduce((prev, current) => {
+
+          /* Macro: ECHO IT, SCREEN IT */
+
+          if ( x = current.match(/^(echo|screen)\s+it$/i) ) {
+            prev.push(x[1] + ' on')
+            prev.push(x[1] + ' off')
+          }
+
+          /* Macro: COLUMN HIDDEN */
+
+          else if ( x = current.match(/^(columns)\s+hidden$/i) ) { // Use undocumented _showhidden meta command to show all columns temporarily.
+            echo == 'on' && prev.push('echo off')
+            screen && prev.push('screen off')
+            prev.push('_showhidden on')
+            prev.push(x[1])
+            prev.push('_showhidden off')
+            echo == 'on' && prev.push('echo on q')
+            screen && prev.push('screen on q')
+          }
+          else
+            prev.push(current)
+          return prev
+        }, [])
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'After macro expansion parsed: ' + RESET + util.inspect(parsed, true, 10, true))
+
+        /* Iterate command stack. */
+
+        for (let cmdIndex = 0; cmdIndex < parsed.length; cmdIndex++ ) {
+          let meta = parsed[cmdIndex].trim()
+          debug & d_BatchTracing && ansiErrOut(DEBUG + 'The forloop on ' + cmdIndex + ' parsed: ' + meta + RESET)
+
+          // Replace replacable elements.
+          meta = meta.replace('${jobnum}', repl.jobnum)
+          meta = meta.replace('${jobname}', repl.jobname)
+          meta = meta.replace('${jobid}', repl.jobid)
+
+          // Eliminate commands that run before logon.
+          if ( loggedOn && (meta.startsWith('terminal') && meta != 'terminal') ) {
+            ansiErrOut(ERROR + 'User ' + ITEM + ejes.loggedOnUser + ERROR + ' is already logged on.  The ' + ITEM + meta + ERROR + ' command is valid only before your first host command.' + RESET)
+            issueResume = true
+            break
+          }
+
+          /* TERMINAL */
+
+          else if ( meta.startsWith('terminal') ) {
+            if ( metaFound(cmdIndex) )
+              interpretTerminal({value: meta, announce: true})
+            issueResume = true
+            break
+          }
+
+          /* ECHO */
+
+          else if ( (x = meta.match(/^echo(\s*on|\s*off){0,1}(\s*q){0,1}$/)) != null ) {
+            debug & d_BatchTracing && ansiErrOut(DEBUG + 'echo parsed this meta: ' + meta + RESET)
+            if ( metaFound(cmdIndex) ) {
+              let query = ! x[1] || x[1].trim().length == 0
+              let quiet = x[2] && x[2].trim() == 'q'
+              x[1] ? echo = (x = x[1].trim()) == 'on' ? x : x == 'off' ? x : echo : echo;
+              (query || ! quietPlease) && ansiErrOut(INFO + 'echo is ' + ITEM + echo +  INFO + '.' + RESET)
+              if ( ! process.stdout.isTTY && echo == 'on' )
+                ansiErrOut(HILITE + 'Stdout is redirected to a file and will not be visible.' + RESET)
+              if ( meta.length > 4 && echo == 'on' && loggedOn && ! quiet )
+                hostQuery('nop')
+              else
+                issueResume = true
+            }
+            break
+          }
+
+          /* SCREEN */
+
+          else if ( (x = meta.match(/^screen(\s*on|\s*off){0,1}(\s*q){0,1}$/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              let query = ! x[1] || x[1].trim().length == 0
+              let quiet = x[2] && x[2].trim() == 'q'
+              x[1] ? screen = (x = x[1].trim()) == 'on' ? true : x == 'off' ? false : screen : screen;
+              (query || ! quietPlease) && ansiErrOut(INFO + 'screen is ' + ITEM + (screen ? 'on' : 'off') + INFO + '.' + RESET)
+              if ( meta.length > 6 && screen && loggedOn && ! quiet)
+                hostQuery('nop')
+              else
+                issueResume = true
+            }
+            break
+          }
+          
+          /* QUIET */
+
+          else if ( (x = meta.match(/^quiet(\s*on|\s*off){0,1}(\s*q){0,1}$/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              x[1] ? quietPlease = (x = x[1].trim()) == 'on' ? true : x == 'off' ? false : quietPlease : quietPlease;
+              ansiErrOut(INFO + 'quiet is ' + ITEM + (quietPlease ? 'on' : 'off') + INFO + '.' + RESET)
+              issueResume = true
+            }
+            break
+          }
+          
+          /* SUBMIT */
+
+          else if ( (x = meta.match(/^submit(?:\s*local:\s*(([\w]\:|\\|\/|\.\/|\.|)((?:[\\|\/]){0,1}[a-z_\-\s0-9\.\\\/]+)+|(")([^"]+)(")))(?:\s(.*))*$/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              interpretLocalSubmit(x)
+              issueResume = true
+            }
+            break
+          }
+          
+          /* PG */
+
+          else if ( (x = meta.match(/^pg(?:\s+(off|update|upd|nop|up|u|down|d|rfind|r|next|n|prev|p)(?:\s+(?=.)(half$|h$|data$|d$|p$|page$|[123456789]\d*[smhd]{0,1}$|$)+)*)*/i)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              let query = ! x[1] || x[1].trim().length == 0
+              let wasOff = false
+              x[1] && x[1].toLowerCase() == 'off' && (x = ['', 'down', 'p']) && (wasOff = true)
+              x[1] && x[1].toLowerCase() == 'u'   && (x[1] = 'up')
+              x[1] && x[1].toLowerCase() == 'd'   && (x[1] = 'down')
+              x[1] && x[1].toLowerCase() == 'r'   && (x[1] = 'rfind')
+              x[1] && x[1].toLowerCase() == 'n'   && (x[1] = 'next')
+              x[1] && x[1].toLowerCase() == 'p'   && (x[1] = 'prev')
+              x[2] && /^(r|upd|nop).*/i.test(x[1])          && (x[2] = undefined)
+              pagingCommand = x[1] ? x[1] + (x[2] ? ' ' + x[2] : '') : pagingCommand;
+              (query || ! quietPlease) && ansiErrOut(INFO + 'Paging command is ' + ITEM + pagingCommand + INFO + '.' + RESET)
+              if ( meta.length > 2 && loggedOn && ! wasOff )
+                hostQuery('', false)
+              else
+                issueResume = true
+            }
+            break
+          }
+          
+          /* AUTOUPDATE */
+
+          else if ( (x = meta.match(/^(?:autoupdate|aup)(\s*on$|\s*off$|$)/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              let query = ! x[1] || x[1].trim().length == 0
+              autoupdate = (x = x[1].trim()) == 'on' ? true : x == 'off' ? false : autoupdate;
+              (query || ! quietPlease) && ansiErrOut(INFO + 'autoupdate update is ' + ITEM + (autoupdate ? 'on' : 'off') + INFO + '.' + RESET)
+              issueResume = true
+            }
+            break
+          }
+          
+          /* BEEP */
+
+          else if ( (x = meta.match(/^beep(\s*on$|\s*off$|$)/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              let query = ! x[1] || x[1].trim().length == 0
+              alarm = (x = x[1].trim()) == 'on' ? true : x == 'off' ? false : alarm;
+              (query || ! quietPlease) && ansiErrOut(INFO + 'Beep is ' + ITEM + (alarm ? 'on' : 'off') + INFO + '.' + RESET)
+              issueResume = true
+            }
+            break
+          }
+          
+          /* HISTORY */
+
+          else if ( (x = meta.match(/^(?:history|his)((?:\s(clear)){0,1}|(?:\s(\d+\s*){0,29}))$/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              if ( ! x[1] ) {
+                historySnapshot = Array.from(rl.history)
+                historySnapshot.forEach((item, index) => {
+                  if ( index > 0 ) // Don't need history as a possible choice.
+                    ansiErrOut(index.toString().padStart(2, ' ') + ': ' + item)
+                })
+              }
+              else if ( x[1].trim() == 'clear' ) {
+                rl.history = []
+                historySnapshot = undefined
+                ansiErrOut(INFO + 'History ws cleared.' + RESET)
+              }
+              else if ( x[1].trim().length &&  historySnapshot ) {
+                let arr = x[1].trim().split(' ')
+                rl.write((x = arr.reduce((total, item) => { return total + (historySnapshot[item] + ';')}, '')).substring(0, x.length - 1))
+              }
+              issueResume = true
+            }
+            break
+          }
+          
+          /* FLUSH */
+
+          else if ( meta == 'flush' ) {
+            if ( metaFound(cmdIndex) )
+              issueResume = true
+            break;
+          }
+          
+          /* EXIT, LOGOFF, RETURN */
+
+          else if ( meta == 'exit' || meta == 'logoff' || meta == 'return') {
+            if ( metaFound(cmdIndex) ) {
+              rl.close()
+              term.logoff()
+              return
+            }
+            break
+          }
+          
+          /* PAUSE */
+
+          else if ( (x = meta.match(/^pause(?:\s+(\w+)){0,1}$/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              let pin = x[1] || 'auto'
+              if (! writeResume({pin: pin})) {
+                issueResume = true
+                break;      
+              }
+              writeHistory()
+              term.pause = true
+              loggedOn = false
+              terminated = true
+              rl.close()
+              process.exit()
+            }
+            break
+          }
+          
+          /* INACTIVITY */
+
+          else if ( (x = meta.match(/^inactivity\s+(\d{1,2})$|^inactivity$/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              let query = ! x[1] || x[1].trim().length == 0
+              x = x[1]
+              keepAlive.maxMinutes = (x && parseInt(x) > 2) ? ((x = parseInt(x)) > 2 && x < 100 ? x : 5) : keepAlive.maxMinutes
+              loggedOn&& keepAlive.resetTimer();
+              (query || ! quietPlease) && ansiErrOut(INFO + 'inactivity is ' + ITEM + keepAlive.maxMinutes + INFO + ' minutes.' + RESET)
+              issueResume = true
+            }
+            break
+          }
+          
+          /* DEBUG */
+
+          else if ( (x = meta.match(/^debug\s+([\d\+ ]+)$|^debug$/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              x = x[1]
+              debug = (x && x.trim()) ? Math.max(0, eval(x.trim())) : debug
+              ansiErrOut(INFO + 'debug is ' + ITEM + debug + 'D' + INFO + ', ' + ITEM + debug.toString(16) + 'H' + INFO + ', ' + ITEM + debug.toString(2) + 'D' + INFO + '.' + RESET)
+              issueResume = true
+            }
+            break
+          }
+          
+          /* HELP */
+
+          else if ( (x = meta.match(/^help$|help\s+(.+)$/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              ansiErrOut(interpretHelp(x[1] || ''))
+              issueResume = true
+            }
+            break
+          }
+          
+          /* STRIP */
+
+          else if ( (x = meta.match(/^strip(\s*on$|\s*off$|$)/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              let query = ! x[1] || x[1].trim().length == 0
+              stripHostAttributes = (x = x[1].trim()) == 'on' ? true : x == 'off' ? false : stripHostAttributes;
+              (query || ! quietPlease) && ansiErrOut(INFO + 'strip is ' + ITEM + (stripHostAttributes ? 'on' : 'off') + INFO + '.' + RESET)
+              issueResume = true
+            }
+            break
+          }
+          
+          /* _SHOWHIDDEN */
+
+          else if ( (x = meta.match(/^_showhidden(\s*on$|\s*off$|$)/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              showHiddenColumns = (x = x[1].trim()) == 'on' ? true : x == 'off' ? false : showHiddenColumns
+              ! quietPlease && ansiErrOut(INFO + (showHiddenColumns? 'Checking host for hidden columns.' : 'Hidden column checking complete.') + RESET)
+              if ( meta.length > 'showhidden'.length  && loggedOn )
+                hostQuery('nop')
+              else
+                issueResume = true
+            }
+            break
+          }
+          
+          /* BLANKS */
+
+          else if ( (x = meta.match(/^blanks(\s*on$|\s*off$|$)/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              let query = ! x[1] || x[1].trim().length == 0
+              blanks = (x = x[1].trim()) == 'on' ? true : x == 'off' ? false : blanks;
+              (query || ! quietPlease) && ansiErrOut(INFO + 'blanks is ' + ITEM + (blanks ? 'on' : 'off') + INFO + '.' + RESET)
+              issueResume = true
+            }
+            break
+          }
+          
+          /* NOCOLOR */
+          
+          else if ( (x = meta.match(/^nocolor(\s*on$|\s*off$|$)/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              let query = ! x[1] || x[1].trim().length == 0
+              setErrStrip((x = x[1].trim()) == 'off' ? false : x == 'on' ? true : getErrStrip());
+              (query || ! quietPlease) && ansiErrOut(INFO + 'No colorization (for stderr) is ' + ITEM + (getErrStrip() ? 'on' : 'off') + INFO + '.' + RESET)
+              issueResume = true
+            }
+            break
+          }
+          
+          /* SCHEME */
+          
+          else if ( (x = meta.match(/^scheme(\s*[A-Za-z0-9]+$|$)/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              let doHardReset = '';
+              let query = ! x[1] || x[1].trim().length == 0;
+              (x = x[1].trim()).length > 0 || (x = scheme)
+              if ( readSchemeFile(x, undefined, 'update') ) {
+                if ( x != scheme )
+                  doHardReset = HardReset + RESET
+                scheme = x
+              }
+              (query || ! quietPlease) && ansiErrOut(doHardReset + INFO + 'Scheme (for stderr) is ' + ITEM + scheme + INFO + '.' + RESET)
+              issueResume = true
+            }
+            break
+          }
+          
+          /* ROWKEYS */
+          
+          else if ( (x = meta.match(/^rowkeys(\s*on$|\s*off$|$)/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              let query = ! x[1] || x[1].trim().length == 0
+              rowkeys = (x = x[1].trim()) == 'on' ? true : x == 'off' ? false : rowkeys;
+              (query || ! quietPlease) && ansiErrOut(INFO + 'rowkeys (in tabular download) is ' + ITEM + (rowkeys ? 'on' : 'off') + INFO + '.' + RESET)
+              issueResume = true
+            }
+            break
+          }
+          
+          /* CLS */
+          
+          else if ( meta == 'cls' ) {  // Clear is a reserved word in (E)JES, so it cannot be used.
+            if ( metaFound(cmdIndex) ) {
+              console.clear()
+              process.stdout.write(ClearScrn)
+              process.stderr.write(ClearScrn)
+              issueResume = true
+            }
+            break
+          }
+          
+          /* COMMANDS */
+          
+          else if ( meta == 'commands' ) {
+            if ( metaFound(cmdIndex) ) {
+              if ( reportJson &&  reportJson.lineCommands )
+                listFromLineCommands(reportJson)
+              else
+                ansiErrOut(ERROR + 'This display does not support line commands.')
+              issueResume = true
+              }
+            break
+          }
+          
+          /* COLUMNS */
+          
+          else if ( meta == 'columns' ) {
+            if ( metaFound(cmdIndex) ) {
+              listColumns(reportJson)
+              issueResume = true
+            }
+            break
+          }
+          
+          /* STATE */
+          
+          else if ( meta == 'state' ) {
+            if ( metaFound(cmdIndex) ) {
+              listState()
+              issueResume = true
+            }
+            break
+          }
+          
+          /* JOBS */
+          
+          else if ( meta == 'jobs' ) {
+            if ( metaFound(cmdIndex) ) {
+              listJobs(reportJson)
+              issueResume = true
+            }
+            break
+          }
+          
+          /* # (comment) */
+          
+          else  if ( meta.startsWith('#'))  { /* do nothing */ 
+            // Nothing to do and nothing to push.
+            issueResume = true
+            break
+          }
+          
+          /* DOWNLOAD */
+          
+          else if ( (x = meta.match(/^download$|download\s+(.+)$/)) != null ) {
+            if ( metaFound(cmdIndex) ) {
+              if ( loggedOn && download.interpret(meta) ) {
+                download.run()
+                break
+              }
+              else
+                issueResume = true
+            }
+          break
+          }
+          
+          /* Assume it is a host command.  Host will decide. */
+          
+          else  {
+            (debug & (d_BatchTracing | d_HostCmds)) && ansiErrOut(DEBUG + 'Host command found and queued: ' + ITEM  + (meta ? meta : '<omitted>') + RESET)
+            tracking.push(meta)
+            continue // looping through parsed line.
+          }
+        }
+
+        // Parsed array is exhausted.
+        let hostCommand = tracking.join(';')
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'Parsing array exhausted.' + RESET)
+        if ( tracking.length ) {
+          debug & d_BatchTracing && ansiErrOut(DEBUG + 'Will send to host: ' + hostCommand + RESET)
+          hostQuery(hostCommand)
+          issueResume = false
+        }
+        else
+        debug & d_BatchTracing && ansiErrOut(DEBUG + 'Tracking array was empty.  Nothing (more) sent to host.' + RESET)
+      }
+    }
+  if ( issueResume )
+    io.resume(true)
+  prompt()
+  }
+
+  /*********************/
+  /* main program code */
+  /*********************/
+
+  process.on('exit', (code) => { 
+    // Both HardResets required because clear line sometimes eats characters.
+    let mustResetTerminal = HardReset + ClearLine + HardReset
+    ! quietPlease && ansiErrOut(mustResetTerminal + 'Done.  Exit code ' + (process.exitCode || term.hostErrorReceived || 0) + '.  Time: ' + getClientDateStamp());
+    quietPlease && process.stderr.write(HardReset + ClearLine + HardReset)
+    setExitCode(process.exitCode || term.hostErrorReceived || 0) 
+  })
+
+  term.terminated = true // Not logged on yet.
+  if ( process.env._BPX_TERMPATH == 'OMVS' || process.env.NO_COLOR || process.env.FORCE_COLOR == '0' ) {
+    setErrStrip(true);
+    setOutStrip(true);
+    forceNoColor = noColor = true
+  }
+
+  interpretEnvironmentVariables()
+
+  /* Profile Tracking */
+
+  // Ensure that the output of inspected objects is readable (bad node.js color choices).
+  util.inspect.styles.name = util.inspect.styles.null = UTILNAME
+  util.inspect.styles.number = util.inspect.styles.boolean = UTILVAL
+  
+  let padding = ' '.repeat(process.stdout.isTTY ? Math.max(process.stdout.columns, ejesVersion.length) - ejesVersion.length : 1)
+  id = () => {
+    ! quietPlease && ansiErrOut( HardReset + RESET + Bright + FgCyan + BgBlack + Reverse + ejesVersion /*+ padding*/ + NoReverse + RESET + ITEM + '  Type HELP for help or STATE for CLI state.' + HardReset + RESET)
+    quietPlease && ! getErrStrip() && process.stderr.write(HardReset + RESET)
+  }
+
+
+  id = auth.setUpProfileDirectories(id)
+  interpretCommandLine ()
+
+  profileName = auth.access(id, params, profileName) || zoweProfile // NB: profileName used as a state from this point on.
+  options.post.initParms = { columns: cols, rows: rows, userAgent: ejesVersion } // Ensure model 5 default
+
+  interpretCommandLineConnectInfo() // Check for command-line overrides.
+  
+  readRegisters()
+  readHistory()
+
+  debug & d_ProfileDump && ansiErrOut(util.inspect(process.argv, true, 10, true)) 
+
+  scheme = scheme || ejes.colorScheme || 'dark'
+  if ( noColor ) {
+    setOutStrip(true)
+    setErrStrip(true)
+  }
+
+  if ( pin != 'auto' && pin != 'off' )
+    readResume({pin: pin})
+  if ( resumeData || (autoResume && pin != 'off' &&  readResume({pin: 'auto'})) ) {
+    cookie = resumeData.cookie         // This restores the state closely to when the user exited with PAUSE.
+    options.headers.Cookie = cookie
+    inTabular = resumeData.inTabular
+    inBrowser = resumeData.inBrowser
+    atBottom = resumeData.atBottom    
+    lastFunctionName = resumeData.lastFunctionName
+    lastFunctionType = resumeData.lastFunctionType
+    pagingCommand = resumeData.pagingCommand
+    autoupdate = resumeData.autoupdate
+    blanks = resumeData.blanks
+    echo = resumeData.echo
+    keepAlive.maxMinutes = resumeData.keepAliveMaxMinutes
+    setErrStrip(resumeData.noColorStderr)
+    setOutStrip(resumeData.noColorStdout)
+    quietPlease = resumeData.quietPlease
+    rowkeys = resumeData.rowkeys
+    scheme = resumeData.scheme
+    screen = resumeData.screen
+    stripHostAttributes = resumeData.strip
+
+    // Set up options not automatically set if doing a normal logon.
+    options.post.platformEncoding = '1047'
+    options.hostname = ejes.hostname
+    options.port = ejes.port
+    options.rejectUnauthorized = ejes.rejectUnauthorized
+    options.post.execParms.rows = rows = parseInt(resumeData.rows)
+    options.post.execParms.columns = cols = parseInt(resumeData.cols)
+    loggedOn = true
+  }
+
+  readSchemeFile(scheme)
+  id && id()
+  term.terminated = false // Getting ready to log on.
+  io.autoRunRegister()
+
+/*  The next paragraph of code needs to ultimately be removed as it
+    is obsolete.  Now ejes profile handles profile work.
+*/
+
+  var answers = [ejes.loggedOnUser || '', '', ejes.hostname || '', ejes.port || '', 'n']
+  const password = RESET + 'Password'
+  const profileIt = 'Save to profile(y/n)?'
+  var questions = ['User ID', password, RESET + 'Host Address', RESET + 'Host Port', 'basePath', 'rejectUnauthorized', profileIt]
+ 
+  io.index = hostRegularProcessing; // Disable credentials processing.
+
+  prompt()
+
+  io.start()
+
+  rl.on('close', () => {
+    process.on('SIGINT', () => { ansiErrOut(ERROR + 'CTRL + C exit requested' + RESET); term.signal = true; term.logoff({force: true}) } )
+    debug & d_BatchTracing && ansiErrOut(DEBUG + 'rl.on close' + RESET)
+    io.readyUpdateClosed()
+    debug & d_BatchTracing && io.wasRedirected && ansiErrOut(DEBUG + 'rl.on close: redirected file exhausted.' + RESET)
+    io.closeRequested = true
+    if ( ! io.isInputBuffered() ) {
+      debug & d_BatchTracing && ansiErrOut(DEBUG + 'rl.on close: no buffer' + RESET)
+      io.close()
+    }
+    else
+      io.next()
+  });
+
+  rl.on('line', (input) => {
+    debug & d_BatchTracing && ansiErrOut(DEBUG + 'rl.on line' + RESET)
+    ansiLogOut('>' + input);
+    if ( io.ready(input) )
+      lineInput(input, io.index < hostRegularProcessing)
+  });
+
+  function intWarning() { 
+    io.pause()
+    ansiErrOut('\n')
+    ansiErrOut(ERROR + 'Interrupt received.  Use ' + ITEM + 'exit' + ERROR + ', '  + ITEM + 'return' + ERROR + ', or ' + ITEM + 'logoff' + ERROR + ' instead.' + RESET)
+    io.resume() 
+  }
+
+  rl.on('SIGINT', () => {
+    intWarning()
+  });
+
+  process.on('SIGPIPE', () => { ansiErrOut(ERROR + 'Broken Pipe' + RESET); term.signal = true; term.logoff() })
+  process.on('SIGHUP', () =>  { ansiErrOut(ERROR + 'Hangup' + RESET);      term.signal = true; term.logoff() })
+  process.on('SIGINT', intWarning )
+
+  io.readyCommandLine()
+}
+if ( process.argv[1].slice(-7).toLowerCase() != 'main.js' && process.argv[1].slice(-4).toLowerCase() != 'zowe' )
+  main()
+module.exports = {
+  main
+}

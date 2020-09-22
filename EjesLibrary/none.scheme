@@ -1,0 +1,54 @@
+# test - To show scheme compile results when starting EJES BATCH or EJES QUERY, remove the space between # and test.
+#
+# None Scheme: No colors are defined, however underline and reverse video ansi attributes will show up.
+#              Please use --no-color for ADA 508 Accessibility instead.
+#
+
+#
+# Default background for terminal - RESET is required and must be first in the scheme.
+# 
+RESET = 
+#
+
+# Color choices
+DEBUG   = 
+ERROR   = 
+HILITE  = 
+ITEM    = 
+INFO    = 
+MSG     = 
+FLAG    = 
+DEFAULT = 
+
+# Debug mode object inspection.  
+# Note that user should never see these colors under normal circumstances
+#
+# You may still want assignments
+# to make this more readable for your terminal characteristics.
+# Black is better for white screens and white for black, etc.
+#
+# White background
+#UTILNAME = black
+#UTILVAL  = black
+#UTILDATE = black
+# Black and powershell background
+UTILNAME   = white
+UTILVAL    = white
+UTILDATE   = white
+UTILFUNC   = white
+UTILREGEX  = white
+UTILFUNC   = white
+UTILSTRING = white
+
+#
+# "Standard" 3279 Color Dark Mode mapping for EJES BATCH Screen On output
+#
+ACTIVE3270 = 
+INMENU3270 = 
+HILITE3270 = 
+PARAMS3270 = 
+MSGHDR3270 = 
+ISTEXT3270 = 
+ERRORS3270 = 
+UNDISC3270 =  
+FILTER3270 = 

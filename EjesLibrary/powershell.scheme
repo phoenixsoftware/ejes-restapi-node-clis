@@ -1,0 +1,43 @@
+# test - To show scheme compile results when starting EJES BATCH or EJES QUERY, remove the space between # and test.
+#
+# Powershell scheme: Not good in Mac terminal.
+#                    Not guarenteed blue except under vanilla powershell configuration.
+#
+
+#
+# Blue background, but only on powershell! - RESET is required and must be first in the scheme.
+# 
+RESET = BLUEWHITE
+#
+
+# Color choices
+DEBUG   = MAGENTA
+ERROR   = RED
+HILITE  = YELLOW
+ITEM    = ORANGE
+INFO    = LIME
+MSG     = SKYBLUE
+FLAG    = GREEN
+DEFAULT = OLIVE
+
+# Debug mode object inspection
+# Note that user should never see these colors under normal circumstances
+UTILNAME   = grey
+UTILVAL    = yellow
+UTILREGEX  = red
+UTILSTRING = green
+UTILFUNC   = cyan
+UTILDATE   = cyan
+
+#
+# "Standard" 3279 Color Dark Mode mapping for EJES BATCH Screen On output
+#
+ACTIVE3270 = WHITE
+INMENU3270 = GRAY
+HILITE3270 = YELLOW
+PARAMS3270 = BROWN
+MSGHDR3270 = SKYBLUE
+ISTEXT3270 = LIME
+ERRORS3270 = RED
+UNDISC3270 = MAGENTA 
+FILTER3270 = SKYBLUE

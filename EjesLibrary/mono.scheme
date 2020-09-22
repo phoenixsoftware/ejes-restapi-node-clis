@@ -1,0 +1,47 @@
+# test - To show scheme compile results when starting EJES BATCH or EJES QUERY, remove the space between # and test.
+#
+# Mono scheme
+#
+
+#
+# White background - RESET is required and must be first in the scheme.
+# 
+RESET = WHITEBLACK
+#
+
+# DEBUG is assigned a color since debug mode is not a normal operation mode.
+DEBUG   = MAGENTA
+
+# Color choices
+ERROR   = "\x1b[38;5;245m"
+HILITE  = "\x1b[38;5;245m"
+ITEM    = "\x1b[38;5;237m"
+INFO    = "\x1b[38;5;240m"
+MSG     = "\x1b[38;5;240m"
+FLAG    = "\x1b[38;5;240m"
+DEFAULT = "\x1b[38;5;244m"
+
+# Debug mode object inspection. 
+# Note that user should never see these colors under normal circumstances
+UTILNAME = grey
+UTILVAL  = yellow
+UTILREGEX = red
+UTILSTRING = green
+UTILFUNC = cyan
+UTILDATE = cyan
+
+#
+# "Standard" 3279 Color Dark Mode mapping for EJES BATCH Screen On output
+#
+ACTIVE3270 = "\x1b[38;5;247m"
+INMENU3270 = "\x1b[38;5;250m"
+HILITE3270 = "\x1b[38;5;250m"
+PARAMS3270 = "\x1b[38;5;240m"
+MSGHDR3270 = "\x1b[38;5;248m"
+ISTEXT3270 = "\x1b[38;5;232m"
+ERRORS3270 = "\x1b[38;5;245m"
+FILTER3270 = "\x1b[38;5;244m"
+# This is colored since it should not be displayed under normal circumstances. 
+# If you see this color appear, please report the circumstances so it can be properly supported.
+UNDISC3270 = MAGENTA 
+
