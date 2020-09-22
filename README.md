@@ -58,7 +58,7 @@ You can also issue the **help** command in *EJES Batch* and use the argument *he
 Before you work with package, take a moment to ensure your operating system, node.js, and npm are up to date.  
 
 [(top)](#readme)
-# Installation and Usage
+## Installation and Usage
 
 The EJES API, EJES Batch, and EJES Query command groups may be used whether or not Zowe support is installed. Enter the following command to install them:
 
@@ -74,11 +74,15 @@ The CLIs accept the same operands, options, and arguments (parameters) as for zo
 
 You will be required to supply an EJES profile using the ejes profiles command with arguments on first use. When you issue an ejes profiles command to create or update a local profile, the command prompts for your input. You are given the option of using your default zowe profile, if you have one defined.
 
-`Ejes profiles [create | delete | list | set-default | update] [profile-name | current-default] [-v | ‑‑verbose | -s | ‑‑secret | ‑‑sc]`
+`ejes profiles [create | delete | list | set-default | update] [profile-name | current-default] [-v | ‑‑verbose | -s | ‑‑secret | ‑‑sc]`
+
+For example: 
+
+`ejes profiles create jes3`
 
 Issue the following command for help:
 
-   `ejes profiles -h`
+`ejes profiles -h`
 
 An additional command is provided to assist you in creating user color scheme files. The file colorscheme.txt installed with the CLI gives further details on this optional topic.
 
