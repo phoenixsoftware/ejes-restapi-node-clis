@@ -26,7 +26,6 @@ require('./debugCodes')
 const util = require('util')
 const { ansiErrOut } = require('./ansiOut')
 const { spawnSync } = require('child_process')
-const { readProfile } = require('./common')
 const os = require('os')
 const fs = require('fs')
 const { randomFillSync } = require('crypto')
@@ -39,8 +38,8 @@ ejes = { basePath: '/EjesWeb/api', rejectUnauthorized: true }
 
 options = {
   request: 0,
-  hostname: '',   //'mvs70.phx.phoenixsoftware.com', 
-  port: 80,       //59284 /*58789*/ /*54763*/, 
+  hostname: '',
+  port: 80, 
   method: 'POST', 
   rejectUnauthorized: true,
   path: ejes.basePath + '/init', 
@@ -204,6 +203,7 @@ function getPostInfo() {
 
 */
 function access(id, params, profileName) {
+  const { readProfile } = require('./common')
   var defaultProfile
   ejes.authEdit = true;
   if ( params && params.arguments ) {
@@ -224,6 +224,7 @@ function access(id, params, profileName) {
     }
     catch (e) {
       id && id()
+      console.error(e)
       ansiErrOut('')
       ansiErrOut(ERROR + 'Unable to read profile, code: ' + ITEM + e.code + RESET + ', errno:' + ITEM + e.errno + RESET)
       ansiErrOut(ERROR + 'Message: ' + ITEM + e.message + RESET)

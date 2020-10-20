@@ -12,7 +12,7 @@
 *
 */
 
-const ejesVersion = 'EJES API, a CLI component of (E)JES.  V0.1.2'
+const ejesVersion = 'EJES API, a CLI component of (E)JES.  V0.1.3'
 const https = require('https')
 const util = require('util')
 const fs = require('fs')
@@ -306,10 +306,12 @@ function main(params) {
       options.hostname = opts.host
       options.port = parseInt(opts.port)
       options.rejectUnauthorized = opts.rejectunauthorized;
+      opts.platformencoding && (options.post.platformEncoding = opts.platformencoding)
 
-      if ( command == 'exec ' && opts.cookie ) {
+      if ( command == 'exec' && opts.cookie ) {
         delete options.post.initParms
         delete options.headers.Authorization
+        delete options.post.platformEncoding
       }
       else { 
         command == 'exec' && ! opts.cookie && (sessionType = 'stateless');
@@ -336,7 +338,6 @@ function main(params) {
       opts.translatescreen && (options.post.execParms.translateScreen = opts.translateacreen)
       opts.useinternalconsole && (options.post.execParms.userAgent = opts.useragent)
       opts.waitforresponse && (options.post.execParms.waitForResponse = opts.waitforresponse)
-      opts.platformencoding && (options.post.platformEncoding = opts.platformencoding)
       downloadSetup()
     }
 

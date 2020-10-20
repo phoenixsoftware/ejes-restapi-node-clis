@@ -1,7 +1,7 @@
 {
   "name": "@phoenixsoftware/ejes-restapi-node-clis",
-  "version": "0.2.3",
-  "description": "Enables the EJES QUERY, EJES BATCH, and EJES Profile commands.",
+  "version": "0.2.14",
+  "description": "Enables the EJES API, EJES BATCH, EJES Profile, EJES QUERY commands.",
   "main": "ejes",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

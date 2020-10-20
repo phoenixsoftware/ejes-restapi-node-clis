@@ -13,7 +13,7 @@
 */
 
 function main(params) {
-  const ejesVersion = 'EJES Batch, a CLI component of (E)JES.  V0.5.8'
+  const ejesVersion = 'EJES Batch, a CLI component of (E)JES.  V0.5.9'
   
   const {writeJsonResponse, isPureNode, setZoweParams, setErrStrip, setOutStrip, ansiErrOut, ansiLogOut, errColorControl, getOutStrip, getErrStrip, setExitCode, setLocalConsole, setObj, setMessage, setZoweConsole, isResponseFormatJson, stripCodes, outColorControl } = require('./EjesLibrary/ansiOut')
   params &&  setZoweParams(params)
@@ -21,13 +21,13 @@ function main(params) {
 
   const https = require('https')
   const { spawn, exec, execSync } = require('child_process')
-  const { abbreviateNumber, debugRequest, debugResponse, fileSizeSI, getClientDateStamp, term, JSONparse, flagReadOnly, flagWriteable, inFile, outFile } = require('./EjesLibrary/Common.js')
+  const { abbreviateNumber, debugRequest, debugResponse, fileSizeSI, getClientDateStamp, term, JSONparse, flagReadOnly, flagWriteable, inFile, outFile } = require('./EjesLibrary/common.js')
   const os = require('os')
   const readline = require('readline')
   const fs = require('fs')
   const util = require('util')
   require('./EjesLibrary/debugCodes')
-  const auth = require('./ejesLibrary/auth.js')
+  const auth = require('./EjesLibrary/auth.js')
 
   const reasonableEnumValue = 200
   const responseOkay_200 = 200
@@ -180,7 +180,7 @@ function main(params) {
             ansiErrOut(INFO + 'debug is ' + ITEM + debug + 'D' + INFO + ', ' + ITEM + debug.toString(16) + 'H' + INFO + ', ' + ITEM + debug.toString(2) + 'D' + INFO + '.' + RESET)
             break
           case '-i' : case '--inactivity':
-            keepAlive.maxMinutes = validateOrExit(i, argv, () => { let val; return (value = argv[ i + 1]) > 99 || value < 2 || isNaN(value) },
+            keepAlive.maxMinutes = validateOrExit(i, argv, () => { let val; return (value = argv[ i + 1]) > 99 || value < 3 || isNaN(value) },
               'ERROR: --inactivity requires a value between 2 and 99.')
             break
           // Overrides for after profile is read.
@@ -750,25 +750,25 @@ function main(params) {
                 '\n' +
                 'Options may be issued on the terminal command line.  Surround the option argument in double-quotes if it includes spaces.\n' +
                 'Single dash options are not available to Zowe users.  Use the double dash option instead.\n' +
-                '    -a,    --autoupdate              Automatically add the update command when you press enter (starts with ' + DEFAULT + 'autoupdate off' + RESET +')\n' +
+                '    -a,    --autoupdate              automatically add the update command when you press enter (starts with ' + INFO + 'autoupdate ' + DEFAULT + 'off' + RESET +')\n' +
                 '    --bp,  --base-path               specify the base path for the (E)JES RESTapi server; defaults to /EjesWeb/api\n' +
-                '    -b,    --blanks                  display blank lines to stderr (starts with ' + DEFAULT + 'blanks on' + RESET +')\n' +
+                '    -b,    --blanks                  display blank lines to stderr (starts with ' + INFO + 'blanks ' + DEFAULT + 'on' + RESET +')\n' +
                 '    -c,    --cmdstack "cmd;cmd..."   specify commands to run before any redirected input or before manual entry\n' +
                 '    -cs,   --colorScheme             specify a color scheme to use (dark, light, powershell, mono, none, or a user created scheme)\n' +
                 '    --dbg, --debug n                 enable debugging options as directed by technical support\n' +
-                '    -e,    --echo                    host output sent stdout (starts with ' + DEFAULT + 'echo off' + RESET +')\n' +
-                '    -i,    --inactivity m            specify host activity timeout in minutes (starts set to 2)\n' +
+                '    -e,    --echo                    host output sent stdout (starts with ' + INFO + 'echo ' + DEFAULT + 'off' + RESET +')\n' +
+                '    -i,    --inactivity m            specify host activity timeout in minutes (starts set to 5)\n' +
                 '    -h,    --help topic              request help, optionally with a specific help topic (see list below)\n' +
                 '           --host address            specify the host address for the (E)JES RESTapi server\n' + 
                 '    --ha,  --helpApp                 request help (for Zowe compatibility)\n' +
-                '    --nc,  --no-color                display lines without ANSI color codes (starts with ' + DEFAULT + 'no-color off' + RESET +')\n' +
+                '    --nc,  --no-color                display lines without ANSI color codes (starts with ' + INFO + 'nocolor ' + DEFAULT + 'off' + RESET +')\n' +
                 '    --pw,  --password pw             specify password, typically you TSO credentials; you must also specify --user\n' +
                 '           --port                    specify the port for the (E)JES RESTapi server\n' +
                 '    -q     --quiet                   specify whether to mute interactive informational messages\n' + 
                 '    -r     --resume                  resume a paused session, optionally specifying the pin used to pause a session, or off to prevent an auto-resume\n' +
                 '    --ru,  --reject-unauthorized     specify whether to reject self-signed certificates; should be true if specified\n' +
-                '    -s,    --screen                  colorized screen sent to stderr (starts with ' + DEFAULT + 'screen off' + RESET +')\n' +
-                '    -t.    --terminal m              preset terminal model or size; see -h terminal\n' +
+                '    -s,    --screen                  colorized screen sent to stderr (starts with ' + INFO + 'screen ' + DEFAULT + 'off' + RESET +')\n' +
+                '    -t.    --terminal m              preset terminal model or size; see ' + INFO + '-h ' + DEFAULT + 'terminal\n' + RESET +
                 '           --user uid                specify user id, typically your TSO credentials; you must also specify --password\n' +
                 '    -V,    --version                 version info\n' +
                 '\n' +
@@ -834,7 +834,7 @@ function main(params) {
                 '  ○ ' + INFO + 'autoupdate|aup' + RESET + ' [on|' + DEFAULT + 'off' + RESET +']]\n' +
                 '  ○ ' + INFO + 'blanks' + RESET +' [on' + RESET +'|' + DEFAULT + 'off' + RESET + ']\n' +
                 '  ○ ' + INFO + 'cls' + RESET +'\n' +
-                '  ○ ' + INFO + 'columns' + RESET + +' [hidden]\n' +
+                '  ○ ' + INFO + 'columns' + RESET +' [hidden]\n' +
                 '  ○ ' + INFO + 'commands' + RESET +'\n' +
                 '  ○ ' + INFO + 'debug' + RESET +' [value]\n' +
                 '  ○ ' + INFO + 'download' + RESET +' [<number>|*|<time-date>|' + DEFAULT + 'first' + RESET +'][<number>|<time-date>|' + DEFAULT + 'last' + RESET +'][keep|' + DEFAULT + 'discard' + RESET +'|interpret][mark][notit|notitle|notitles|nolim|nolimit][txt|text|pdf]\n' +
@@ -967,12 +967,14 @@ function main(params) {
               '@r                 Revert registers to last save.\n' +
               '@s                 Save all registers.\n' +
               '\n'  +
-              '                   st;o=rb*;update@1  (Store commands in register 1)\n' +
-              '                   @c1                (Clear register 1)\n' +
-              '                   @r                 (Revert to saved registers)\n' +
-              '                   @5                 (Immediately run commands in register 5)\n' +
+              'EXAMPLES:\n' +
+              ITEM + '                   st;o=rb*;update@1  ' + RESET +'(Store commands in register 1)\n' +
+              ITEM + '                   @c1                ' + RESET +'(Clear register 1)\n' +
+              ITEM + '                   @r                 ' + RESET +'(Revert to saved registers)\n' +
+              ITEM + '                   @5                 ' + RESET +'(Immediately run commands in register 5)\n' +
               '\n' +
-              '                   terminal *;o=rb*;st;sort status d;display fov;update;screen on;# Initialize like ISPF@h\n' +
+              'Example saving the auto-run register h:\n' +
+              ITEM + '                   terminal *;o=rb*;st;sort status d;display fov;update;screen on;# ' + INFO + 'Initialize like ISPF' + ITEM + '@h\n' +
               '\n'
               break
       case 'beep':
@@ -1052,18 +1054,20 @@ function main(params) {
                 INFO + 'Text' + RESET + ' and ' + INFO + 'pdf' + RESET + ' cause output to a file in the current working directory.  The file name is\n' +
                 'created using the job or data set name.  If neither is specified, text is streamed\n' +
                 'to stdout.  ' + INFO + 'Pdf' + RESET + ' is supported only in browsers and will be ignored in tabular displays.\n' +
+                'If ' + INFO + 'EJES_DOWNLOAD_PATH' + RESET + ' is specified in the environment, that path is used as the download\n' +
+                'folder.\n' +
                 '\n' +
                 'A mark record consists of ' + INFO + '___(E)JES_EXTRACT_MARK___' + RESET +' which is three underscore characters,\n' + 
                 'followed by the words (E)JES, EXTRACT, and MARK separated from each other by an underscore,\n' + 
                 'and three more underscore characters.\n' + 
                 '\n' +
                 'If there is job information associated with the source of the extract (e.g., if\n' + 
-                'extracting while browsing a job’s output), the characters ' + INFO + 'JOBNAME=jobname,JOBID=jobid' + RESET +'\n' + 
+                'extracting while browsing a job’s output), the characters ' + INFO + 'JOBNAME=' + DEFAULT + 'jobname' + INFO + ',JOBID=' + DEFAULT + 'jobid' + RESET +'\n' + 
                 'are appended to the end of the mark record. The job name and job ID are variable-length\n' + 
                 'values; there are no embedded blanks in the mark record.\n' +
                 '\n'
                 break
-      case 'autoupdate':
+      case 'autoupdate': case 'aup':
           h += INFO + 'autoupdate|aup' + RESET +' [on|' + DEFAULT + 'off' + RESET +']]  (-a, --autoupdate, EJES_AUTOUPDATE)\n' +
                 '\n' +
                 'Specify ' + INFO + 'on' + RESET +' to append ";UPDATE" to each host transaction.  Normally, EJES BATCH requires you to \n' +
@@ -1102,7 +1106,7 @@ function main(params) {
                 ITEM + 'help all' + RESET + '     display all help topics.\n'
                 '\n'
                 break
-      case 'history':
+      case 'history': case 'his':
           h += INFO + 'history|his [' + RESET + 'clear' + INFO + ']' + RESET + '\n' +
                 '\n' +
                 'Display command line history, clear it, or construct a command stack of history elements.\n' +
@@ -1119,7 +1123,7 @@ function main(params) {
       case 'inactivity':
           h += INFO + 'inactivity' + RESET +' [minutes]  (-i, --inactivity, EJES_INACTIVITY)\n' +
                 '\n' +
-                'Specify the host inactivity timeout between ' + INFO + '2' + RESET + ' and ' + INFO + '99' + RESET + ' minutes.  Initially set to ' + INFO + '5' + RESET + '.\n' +
+                'Specify the host inactivity timeout between ' + INFO + '3' + RESET + ' and ' + INFO + '99' + RESET + ' minutes.  Initially set to ' + INFO + '5' + RESET + '.\n' +
                 'Timer begins at logon and is refreshed every time you send a host command.  It is\n' + 
                 'not refreshed by a meta command.  Use ' + INFO + '--inactivity' + RESET + ' to specify on the command line.\n' +
                 'At expiration, the user is logged off.\n\n'
@@ -1330,6 +1334,7 @@ function main(params) {
         options.headers.Cookie = cookie = res.headers['set-cookie'][0]
         delete options.headers.Authorization
         delete options.post.initParms
+        delete options.rejectUnauthorized
       }
       options.execParms && options.execParms.commmandData && delete options.execParms.commmandData
       var txt = false, pdf = false, file, name
@@ -1440,6 +1445,7 @@ function main(params) {
           else {  // Was NOT a download.
             if ( debug & d_ResponseHeaders && options.query.startsWith('?q=') ) {
               let json = JSONparse(data, 'debug & d_ResponseHeaders')
+              ansiErrOut ({ status: json.status, statusMessage: json.statusMessage, elapsed: json.elapsed, returnCode: json.returnCode, reasonCode: json.reasonCode })
               let array = options.query.substring(3).split(',').sort()
               let result = array.reduce((prev, current, idx) => {
                 idx > 0 && (prev += ITEM + ', ')
@@ -1503,7 +1509,8 @@ function main(params) {
   /* list jobs */
 
   function listJobs(json) {
-    let stripped = setOutStrip(! getOutStrip() && ! process.stdout.isTTY)
+    let stripped = false
+    ! forceNoColor && (stripped = setOutStrip(! getOutStrip() && ! process.stdout.isTTY))
     function listJobsUsing(out) {
       if ( reportJson && reportJson.submittedJobs ) 
       if ( reportJson.submittedJobs.length > 0 ) {
@@ -1519,13 +1526,14 @@ function main(params) {
     }
     stripped && listJobsUsing(ansiErrOut)
     listJobsUsing(ansiLogOut)
-    stripped && setOutStrip(false)
+    ! forceNoColor && stripped && setOutStrip(false)
   }
 
   /* list columns */
 
   function listColumns(json) {
-    let stripped = setOutStrip(! getOutStrip() && ! process.stdout.isTTY)
+    let stripped = false
+    ! forceNoColor && (stripped = setOutStrip(! getOutStrip() && ! process.stdout.isTTY))
     function listColumnsUsing(o) {
       if ( reportJson && reportJson.columns ) {
         var maxTitleLength = 10;
@@ -1568,13 +1576,14 @@ function main(params) {
     }
     stripped && listColumnsUsing({out: ansiLogOut})
     listColumnsUsing({out: ansiErrOut, showInfo: true})
-    stripped && setOutStrip(false)
+    ! forceNoColor && stripped && setOutStrip(false)
   }
 
   /* list from line commands */
 
   function listFromLineCommands(json) {
-    let stripped = setOutStrip(! getOutStrip() && ! process.stdout.isTTY)
+    let stripped = false;
+    ! forceNoColor && (stripped = setOutStrip(! getOutStrip() && ! process.stdout.isTTY))
     function listFromLineCommandsUsing(out) {
       var count = 0;
       out == ansiErrOut && ansiErrOut('')
@@ -1597,11 +1606,12 @@ function main(params) {
     }
     stripped && listFromLineCommandsUsing(ansiErrOut)
     listFromLineCommandsUsing(ansiLogOut)
-    stripped && setOutStrip(false)
+    ! forceNoColor &&  stripped && setOutStrip(false)
   }
 
   function listState() {
-    let stripped = setOutStrip(! getOutStrip() && ! process.stdout.isTTY)
+    let stripped = false;
+    ! forceNoColor && (stripped = setOutStrip(! getOutStrip() && ! process.stdout.isTTY))
     function listStateUsing(out) {
       var inactive = '<not logged on>'
       if ( loggedOn ) {
@@ -1672,7 +1682,7 @@ function main(params) {
     }
     stripped && listStateUsing(ansiErrOut)
     listStateUsing(ansiLogOut)
-    stripped && setOutStrip(false)
+    ! forceNoColor && stripped && setOutStrip(false)
   }
 
   /* Check response statuses and start logoff if necessary.
@@ -1737,7 +1747,7 @@ function main(params) {
 
     if ( json ) { // Gotta be JSON or nothing to do.
       let hideExtra = (echo == 'on' && process.stdout.isTTY) || screen
-      ansiErrOut(INFO + json.status + ' ' + ITEM +  json.statusMessage + ' ' + (json.elapsed ? json.elapsed : '') + (' ' + fileSizeSI(data.length) + ' ') + (! hideExtra ? ' ' + INFO + (json.function ? json.function.functionType : '') : '')  + RESET)
+      ansiErrOut(INFO + json.status + ' ' + ITEM +  json.statusMessage + ' ' + (json.elapsed ? json.elapsed : '') + (' ' + fileSizeSI(data.length)) + (! hideExtra ? ' ' + INFO + (json.function ? json.function.functionType : '') : '') + (debug && json.returnCode != undefined ? INFO + ', ReturnCode=' + ITEM + json.returnCode : '')  + (debug && json.reasonCode != undefined ? INFO + ', Reason=' + ITEM + json.reasonCode : '') + RESET)
       if ( statusCheckExit (json, res) )
         return
       if ( ! json.function || json.function.functionName != lastFunctionName )
@@ -1962,7 +1972,7 @@ function main(params) {
       options.path = ejes.basePath + '/init' + options.query
       options.post.platformEncoding = '1047'
       options.hostname = ejes.hostname
-      options.port = ejes.port
+      options.port = parseInt(ejes.port)
       options.rejectUnauthorized = ejes.rejectUnauthorized
       options.headers.Authorization = 'Basic ' + ejes.auth
       options.post.initParms.enumValue = 0
@@ -1980,23 +1990,6 @@ function main(params) {
     timer: undefined,
     INTERVAL: 60000,
     RETRY:1000,
-    request: {
-      hostname: '',
-      port: '',
-      method: 'POST',
-      rejectUnauthorized: true,
-      path: '',
-      headers: { 
-        Cookie: '' 
-      },
-      post: { 
-        execParms: {
-          enumValue: 0,
-          command: 'nop'
-        }
-      },
-      query: ''
-    },
 
     resetTimer: () => {
       let now = (new Date()).valueOf()
@@ -2032,25 +2025,29 @@ function main(params) {
         }
         keepAliveInProgress = true
         keepAlive.timer = undefined
-        keepAlive.request.path = ejes.basePath + '/exec'
-        keepAlive.request.hostname = ejes.hostname;
-        keepAlive.request.port = ejes.port
-        keepAlive.request.rejectUnauthorized = ejes.rejectUnauthorized
-        keepAlive.request.headers.Cookie = cookie
+
         if ( diff < (keepAlive.maxMinutes - 2) ) { // Make a request only if during the keep alive period, else let time out.
-          keepAlive.request.request = ++options.request
-          if ( debug & d_RequestAndQuery ) {
-            keepAlive.request.clientDateStamp = getClientDateStamp()
-            ansiErrOut(INFO + "Request " + ITEM + options.request + INFO + ": " + RESET)
-            ansiErrOut(RESET + util.inspect(keepAlive.request, true, 10, true) + RESET)
+          let req = {
+            request: ++options.request,
+            hostname: ejes.hostname,
+            port: parseInt(ejes.port),
+            path: ejes.basePath + '/exec',
+            headers: { Cookie: cookie },
+            method: 'POST',
+            post: { execParms: { enumValue: 0, command: 'nop' } }
           }
-          https.request(keepAlive.request, (res) => {
+          if ( debug & d_RequestAndQuery ) {
+            req.clientDateStamp = getClientDateStamp()
+            ansiErrOut(INFO + "Request " + ITEM + options.request + INFO + ": " + RESET)
+            ansiErrOut(RESET + util.inspect(req, true, 10, true) + RESET)
+          }
+          https.request(req, (res) => {
             if ( debug & d_ResponseHeaders ) {
-              keepAlive.request.clientDateStamp = getClientDateStamp()
-              ansiErrOut(INFO + "Response to request " + ITEM + keepAlive.request.request + INFO + ": " + RESET)
+              req.clientDateStamp = getClientDateStamp()
+              ansiErrOut(INFO + "Response to request " + ITEM + req.request + INFO + ": " + RESET)
               ansiErrOut(RESET + util.inspect(res.headers, true, 10, true)  + RESET)
             }
-            res.on('data', () => {}) 
+            res.on('data', (chunk) => {debug & d_ResponseHeaders && ansiErrOut(JSONParse(chunk.toString(), 'onDataKeepAlive'))}) 
             res.on('end', () => { 
               debug & d_BatchKeepAlive && ansiErrOut(DEBUG + 'keepAlive.handler: nop completed.  Timer reset.' + RESET)
               keepAlive.resetTimer()
@@ -2061,7 +2058,7 @@ function main(params) {
             ansiErrOut(ERROR + '\n' + e + RESET)
             term.logoff() // This is assuming that an error response to a NOP is fatal.  This may need to be changed.
           })
-          .end(() => {debug & d_BatchKeepAlive && ansiErrOut(DEBUG + 'keepAlive.handler: Requesting nop' + RESET) })
+          .end(JSON.stringify(req.post), () => {debug & d_BatchKeepAlive && ansiErrOut(DEBUG + 'keepAlive.handler: Requesting nop' + RESET) })
         }
         else {
           keepAlive.resetTimer()
@@ -3053,7 +3050,7 @@ function main(params) {
     // Set up options not automatically set if doing a normal logon.
     options.post.platformEncoding = '1047'
     options.hostname = ejes.hostname
-    options.port = ejes.port
+    options.port = parseInt(ejes.port)
     options.rejectUnauthorized = ejes.rejectUnauthorized
     options.post.execParms.rows = rows = parseInt(resumeData.rows)
     options.post.execParms.columns = cols = parseInt(resumeData.cols)

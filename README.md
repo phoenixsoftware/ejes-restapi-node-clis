@@ -13,6 +13,7 @@ to use the underlying REST API and the (E)JES product.
   - [There is help for that...](#there-is-help-for-that)
   - [Prerequisites](#prerequisites)
   - [Installation and Usage](#installation-and-usage)
+  - [Support](#support)
 
 ## Available CLIs  
 
@@ -87,5 +88,11 @@ Issue the following command for help:
 An additional command is provided to assist you in creating user color scheme files. The file colorscheme.txt installed with the CLI gives further details on this optional topic.
 
 `ejes ansischeme [dark | light | powershell | mono | none | user-file]`
+
+[(top)](#readme)
+
+## Support
+
+The programs stored in this repository are "distributed sample programs" as defined in chapter 18 of the _(E)JES Reference_.  (E)JES customers may request support on a time-available basis by opening a new (E)JES Web case on the Phoenix Software International support portal.  This is preferable to opening issues or making pull-requests on the GitHub repository.
 
 [(top)](#readme)
