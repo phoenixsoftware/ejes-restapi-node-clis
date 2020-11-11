@@ -13,7 +13,7 @@
 */
 
 function main(params) {
-  const ejesVersion = 'EJES Batch, a CLI component of (E)JES.  V0.5.9'
+  const ejesVersion = 'EJES Batch, a CLI component of (E)JES.  V0.5.10'
   
   const {writeJsonResponse, isPureNode, setZoweParams, setErrStrip, setOutStrip, ansiErrOut, ansiLogOut, errColorControl, getOutStrip, getErrStrip, setExitCode, setLocalConsole, setObj, setMessage, setZoweConsole, isResponseFormatJson, stripCodes, outColorControl } = require('./EjesLibrary/ansiOut')
   params &&  setZoweParams(params)
@@ -56,6 +56,7 @@ function main(params) {
   var showHiddenColumns = false
   var stripHostAttributes = true
   var submitPath = ''
+  var subsystem
   var warnLimited = undefined
   var zoweProfile
 
@@ -155,6 +156,10 @@ function main(params) {
               pin = argv[++i]
             }
             break
+          case '-2': case '--jes2': case '-3': case '--jes3':
+            subsystem = 'JES' + argv[i].slice(-1)
+            i + 1 < argv.length && ! argv[i + 1].startsWith('-') && i++  // Argument optional and ignored.
+            break
           case '--ejes-p': case '--ejes-profile':
            zoweProfile = argv[i + 1] // Fallthru
           case '--prof': case '--profile':
@@ -184,7 +189,7 @@ function main(params) {
               'ERROR: --inactivity requires a value between 2 and 99.')
             break
           // Overrides for after profile is read.
-          case '--no-color': case '--nc':
+          case '--nocolor': case '--nc':
             ncSkip = i + 1
             break;
           case '--cs': case '--colorScheme':   case '--color-scheme':  case '--scheme':
@@ -244,7 +249,7 @@ function main(params) {
           case '--host': ejes.hostname = validateOrExit(i, argv); break;
           case '--port': ejes.port = validateOrExit(i, argv, () => { return null == argv[i + 1].match(/^\d*$/)}, 'ERROR: --port requires an numeric argument'); break;
           case '--base-path': case '--bp': ejes.basePath = validateOrExit(i, argv); break;
-          case '--nc': case '--no-color':
+          case '--nc': case '--nocolor':
             if ( ! forceNoColor || (i + 1 < argv.length && ! argv[i + 1].startsWith('-')))
               noColor = (i + 1 == argv.length) || argv[i + 1].toLowerCase() != 'off' // Not allowed to override NO_COLOR, FORCE_COLOR=0, or OMVS.
             break
@@ -252,7 +257,7 @@ function main(params) {
             scheme = argv[i + 1] // Had to pass on first pass.
             break
           case '--reject-unauthorized': case '--ru': 
-            ejes.rejectUnauthorized = validateOrExit(i, argv, () => { return argv[i + 1] != 'true' && argv[i + 1] != 'false' }, 'ERROR: --base-path requires an argument of true or false') 
+            ejes.rejectUnauthorized = validateOrExit(i, argv, () => { return argv[i + 1] != 'true' && argv[i + 1] != 'false' }, 'ERROR: --reject-unauthorized requires an argument of true or false') 
             break
         }
       }
@@ -740,7 +745,7 @@ function main(params) {
     switch(request) {
       case 'all':
         let text ='\n';
-        ['meta', 'autoupdate', 'beep', 'blanks', 'cls', 'columns', 'commands', 'debug', 'download', 'echo', 'exit', 'flush', 'help', 'history', 'inactivity', 'logoff', 'noColor', 'pause', 'pg', 'quiet', 'resume', 'return', 'rowkeys', 'scheme', 'screen', 'state', 'strip', 'terminal', '!'].forEach((help)=>{
+        ['meta', 'autoupdate', 'beep', 'blanks', 'cls', 'columns', 'commands', 'debug', 'download', 'echo', 'exit', 'flush', 'help', 'history', 'inactivity', 'logoff', 'nocolor', 'pause', 'pg', 'quiet', 'resume', 'return', 'rowkeys', 'scheme', 'screen', 'state', 'strip', 'terminal', '!'].forEach((help)=>{
           h += interpretHelp(help)
           h += '--------------------'
         })
@@ -761,7 +766,7 @@ function main(params) {
                 '    -h,    --help topic              request help, optionally with a specific help topic (see list below)\n' +
                 '           --host address            specify the host address for the (E)JES RESTapi server\n' + 
                 '    --ha,  --helpApp                 request help (for Zowe compatibility)\n' +
-                '    --nc,  --no-color                display lines without ANSI color codes (starts with ' + INFO + 'nocolor ' + DEFAULT + 'off' + RESET +')\n' +
+                '    --nc,  --nocolor                 display lines without ANSI color codes (starts with ' + INFO + 'nocolor ' + DEFAULT + 'off' + RESET +')\n' +
                 '    --pw,  --password pw             specify password, typically you TSO credentials; you must also specify --user\n' +
                 '           --port                    specify the port for the (E)JES RESTapi server\n' +
                 '    -q     --quiet                   specify whether to mute interactive informational messages\n' + 
@@ -771,6 +776,8 @@ function main(params) {
                 '    -t.    --terminal m              preset terminal model or size; see ' + INFO + '-h ' + DEFAULT + 'terminal\n' + RESET +
                 '           --user uid                specify user id, typically your TSO credentials; you must also specify --password\n' +
                 '    -V,    --version                 version info\n' +
+                '    -2,    --jes2                    start with the JES2 spooler instead of the default spooler.\n' +
+                '    -3,    --jes3                    start with the JES3 or JES3plus spooler instead of the default spooler.\n' +
                 '\n' +
                 'You may optionally redirect stdout, stderr, and stdin.  You may pipe stdout to another program.\n' + 
                 '    stdout               host output and the result of the ' + INFO + 'download' + RESET +' meta command\n' +
@@ -845,7 +852,7 @@ function main(params) {
                 '  ○ ' + INFO + 'history|his' + RESET +' [clear|<number>[ <number>...]]\n' +
                 '  ○ ' + INFO + 'inactivity' + RESET +' [<minutes>]\n' +
                 '  ○ ' + INFO + 'logoff' + RESET +'\n' +
-                '  ○ ' + INFO + 'noColor' + RESET +' [' + DEFAULT + 'off' + RESET +'|on]\n' +
+                '  ○ ' + INFO + 'nocolor' + RESET +' [' + DEFAULT + 'off' + RESET +'|on]\n' +
                 '  ○ ' + INFO + 'pause' + RESET +' [<pin>|' + DEFAULT + 'auto' + RESET +']\n' +
                 '  ○ ' + INFO + 'pg' + RESET +' [[|down|d|next|n|off|prev|p|rfind|r|u|up] [|d|data|h|half|p|page|<number>[S|M|H|D]]]\n' +
                 '  ○ ' + INFO + 'quiet' + RESET +' [on|' + DEFAULT + 'off' + RESET +']\n' +
@@ -1003,10 +1010,10 @@ function main(params) {
                 'Erase the screen\n\n'
                 break
       case 'nocolor': case 'nc':
-          h += INFO + 'noColor' + RESET +' [' + DEFAULT + 'off' + RESET +'|off]  (--nc, --no-color, NO_COLOR, FORCE_COLOR=0)\n'+
+          h += INFO + 'nocolor' + RESET +' [' + DEFAULT + 'off' + RESET +'|off]  (--nc, --nocolor, NO_COLOR, FORCE_COLOR=0)\n'+
                 '\n' +
                 'Specify whether stderr output is colorized.  IBM OMVS turns this on by default,\n' + 
-                'otherwise noColor is off by default.  With no argument, the meta command returns the\n' + 
+                'otherwise nocolor is off by default.  With no argument, the meta command returns the\n' + 
                 'current state.\n' +
                 '\n'
                 break
@@ -1045,7 +1052,7 @@ function main(params) {
                 'Used on the CLI as a substitute for the host ' + INFO + 'extract' + RESET +' command.  Output a tabular\n' + 
                 'display or a browser display to stdout regardless of ' + INFO + 'echo' + RESET +' meta command setting.\n' + 
                 'The full length and width is downloaded regardless of the ' + INFO + 'terminal' + RESET +' setting.  Neither\n' +
-                INFO + 'strip' + RESET + ' nor ' + INFO + 'noColor' + RESET +' apply.  The ' + INFO + 'keep' + RESET +', ' + INFO + 'discard' + RESET +', and ' + INFO + 'interpret' + RESET +' settings apply only to spool\n' + 
+                INFO + 'strip' + RESET + ' nor ' + INFO + 'nocolor' + RESET +' apply.  The ' + INFO + 'keep' + RESET +', ' + INFO + 'discard' + RESET +', and ' + INFO + 'interpret' + RESET +' settings apply only to spool\n' + 
                 'output.  ' + INFO + 'Notitles' + RESET +' removes the two header lines from table downloads.  ' + INFO + 'Mark' + RESET +' inserts a\n' + 
                 '"mark record" before outputting the downloaded object.  ' + INFO + 'Nolimit' + RESET + ' allows downloads of\n' +
                 'browsers over 1000 lines and all other displays over 100 lines when a start and end\n' +
@@ -1098,7 +1105,7 @@ function main(params) {
           h += INFO + 'help' + RESET +' (-h, --help)\n' +
                 '\n' +
                 'Request help.  The meta command help and the command line option provide the same results.\n' +
-                'Help is sent to stderr.  You may redirect it to a file with 2>.  Use ' + INFO + 'noColor on' + RESET +' to remove\n' + 
+                'Help is sent to stderr.  You may redirect it to a file with 2>.  Use ' + INFO + 'nocolor on' + RESET +' to remove\n' + 
                 'remove ANSI escape codes.\n' +
                 '\n' +
                 ITEM + 'help meta' + RESET + '    meta commands and a list of meta commands\n' +
@@ -1976,6 +1983,7 @@ function main(params) {
       options.rejectUnauthorized = ejes.rejectUnauthorized
       options.headers.Authorization = 'Basic ' + ejes.auth
       options.post.initParms.enumValue = 0
+      subsystem && (options.post.initParms.subsystem = subsystem)
       options.post.execParms.command = buildautoupdate(options.post.execParms.command)
     }
   makeRequest(options, report)

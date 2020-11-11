@@ -130,7 +130,7 @@ function readSchemeFile(schemeFile = 'dark', show = false, update = false) {
     }
     ansiLogOut(obj)
     ansiErrOut(RESET + '----------')
-    ansiLogOut(HardReset + ClearLine + 'Color testing done.  The colors should have returned to the\ndefault colors of terminal window.\n\n**********************************************************\n*** For ADA 508 accessiblity issues, please use the    ***\n*** --no-color option, which is stored in the profile. ***\n**********************************************************\n')
+    ansiLogOut(HardReset + ClearLine + 'Color testing done.  The colors should have returned to the\ndefault colors of terminal window.\n\n**********************************************************\n*** For ADA 508 accessiblity issues, please use the    ***\n*** --nocolor option, which is stored in the profile. ***\n**********************************************************\n')
   }
   return update
 } // End function readSchemeFile()

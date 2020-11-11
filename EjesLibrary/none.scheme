@@ -1,7 +1,7 @@
 # test - To show scheme compile results when starting EJES BATCH or EJES QUERY, remove the space between # and test.
 #
 # None Scheme: No colors are defined, however underline and reverse video ansi attributes will show up.
-#              Please use --no-color for ADA 508 Accessibility instead.
+#              Please use --nocolor for ADA 508 Accessibility instead.
 #
 
 #

@@ -16,7 +16,7 @@ const {writeJsonResponse, setZoweParams, isPureNode, setExitCode, setErrStrip, s
 require('./EjesLibrary/debugCodes.js')
 function main(params) {
 
-  const ejesVersion = 'EJES Query, a CLI component of (E)JES.  V0.4.10'
+  const ejesVersion = 'EJES Query, a CLI component of (E)JES.  V0.4.11'
   const auth = require('./EjesLibrary/auth')
   const { debugRequest, debugResponse, getClientDateStamp, term, JSONparse } = require('./EjesLibrary/common.js')
   const https = require('https')
@@ -62,7 +62,13 @@ function main(params) {
   var truncatedLineFlagged = false
   var widthTable = process.stdout.isTTY ? process.stdout.columns - 1 : 9999
   var widthReport = widthTable
+  function hfmt(h) { return h.replace(/([^\n]{1,80})\s/g, '$1\n').replace(/\~/g, FLAG).replace(/`/g, RESET) }
 
+  let scheme = process.argv.reduce((choice, value, index, arr)=> { // Pre-read to colorize help.  Command line or Zowe profile choice, or no colorization.
+    return (['--cs', '--colorscheme', '--scheme', '--color-scheme'].indexOf(value) != -1  && index < arr.length) ? arr[index + 1] : choice 
+  }, undefined)
+  ! scheme && params && params.arguments && (scheme = params.arguments.colorScheme)
+  scheme && require('./EjesLibrary/ansiScheme.js').readSchemeFile(scheme)
   const cmdlist = {  // NOTE: Commands are processed in order (generally), so if cmds depend on commands, put them in processing order.
           //012345679012345679012345679012345679012345679012345679012345679012345679   /* RULER for help defining new entries */
     debug: {                 // A property in the cmdlist object can be an option, or a meta object to be accessed from the cmdlist.
@@ -79,10 +85,10 @@ function main(params) {
       minArgumentCount: 0,   // The minmum number of arguments allowed.  0 for none is okay.  Can be greater than 1.
       maxArgumentCount: 1,   // Maximum arguments allowed.  A weak check, but sometimes useful.
       list: false,           // Not sure if this is used.
-      usage: '[[-dbg | --debug] ' + Underscore + 'number' + NoUnderscore + ']',   // The option's usage chart.
-      help: 'Specify debugging behavior.  The values are additive.  7 is useful for\n' + // Help when system references the property name.
-            'figuring out why a table or report isn\'t selected.  For a list\n' +
-            'behaviors, specify --debug list.\n',
+      usage: '[[--dbg | --debug] ' + Underscore + 'number' + NoUnderscore + ']',   // The option's usage chart.
+      help: hfmt('Specify debugging behavior.  The values are additive. 7 is useful for ' + // Help when system references the property name.
+            'figuring out why a table or report isn\'t selected. For a list ' +
+            'behaviors, specify ~--debug list`. '),
       doList: () => {        // Provide a function that display when user uses the 'list' argument.
         ansiLogOut('Value    User   Description')
         ansiLogOut('-----    ----   -----------')
@@ -93,7 +99,6 @@ function main(params) {
         ansiLogOut('64       no     Request and query')
         ansiLogOut('128      no     Response headers')
         ansiLogOut('512      no     JSON response inspector (huge output)')
-        ansiLogOut('1024     no     Zowe parameters if running under Zowe')
         ansiLogOut('\nThese option arguments are additive.  Combining 1, 2, 4 would result in --debug 7.')  
       },
       value: [],             // This is the resulting value read from the command line and often parsed and reformated by the after function.
@@ -104,7 +109,7 @@ function main(params) {
       reparsed: undefined    // Set to true when the option has be reparsed.  Could be used to see if another option was parsed first, or allow one option to parse another safely.
     },
     noColor: {
-      long: '--no-color', short: '--nc', camel: '--noColor',
+      long: '--nocolor', short: '--nc', camel: '--noColor',
       tokens: ['auto', 'on', 'off'], defaultValue: 'on', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
       list: false,
       doList: (item) => {
@@ -114,13 +119,13 @@ function main(params) {
         ansiLogOut('off        no       Always allow ANSI color characters in stdout and stderr')
         ansiLogOut('on         no       Always strip ANSI color characters from stdout and stderr')
         ansiLogOut('<omitted>           Same as on.')
-        ansiLogOut('\nNote: Under OMVS, or with FORCE_COLOR=0 or NO_COLOR defined in the environment, ' + DEFAULT + '--no-color' + RESET + ' is always in effect.')
+        ansiLogOut('\nNote: Under OMVS, or with FORCE_COLOR=0 or NO_COLOR defined in the environment, ' + DEFAULT + '--nocolor' + RESET + ' is always in effect.')
       },
-      usage: '[[' + DEFAULT + '--no-color' + RESET + ' [' + DEFAULT + 'auto' + RESET + ' | yes | no]]',
-      help: 'Enable or disable ANSI color characters in stdout and stderr streams.\n' +
-            'By default, ANSI characters will not appear in redirected output (' + DEFAULT + 'auto' + RESET + ').\n' +
-            'They will also not appear in any output under OMVS, or if NO_COLOR or FORCE_COLOR=0 is defined\n' +
-            'in the environment table.\n',
+      usage: '[[' + DEFAULT + '--nc' + RESET + ' | ' + DEFAULT + '--nocolor' + RESET + ' [' + DEFAULT + 'auto' + RESET + ' | yes | no]]',
+      help: hfmt('Enable or disable ANSI color escape characters in stdout and stderr streams. ' +
+            'By default, ANSI escape characters will not appear in redirected output (~auto`). ' +
+            'They will also not appear in any output under OMVS, or if NO_COLOR ' +
+            'or FORCE_COLOR=0 is defined in the environment table. '),
       value: [],
       after: (cmd) => {
         cmdlist.invalidArgument(cmd)
@@ -147,7 +152,7 @@ function main(params) {
         },
     },
     scheme: {
-      long: '--color-scheme', short: '--cs', zowe: '--scheme', camel: '--colorScheme',
+      zowe: '--color-scheme', short: '--cs', long: '--scheme', camel: '--colorScheme',
       tokens: [], defaultValue: 'dark', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
       list: false,
       doList: (item) => {
@@ -159,12 +164,13 @@ function main(params) {
         ansiLogOut('mono         no       Apply grayscale scheme in mono.scheme.')
         ansiLogOut('none         no       Apply no color scheme in none.scheme.')
         ansiLogOut('<user>       no       Apply a custom user color scheme using the name supplied.')
-        ansiLogOut('\nNote: Under OMVS, or with ' + ITEM + '--no-color' + RESET + ', color schemes are ignored.')
+        ansiLogOut('\nNote: Under OMVS, or with ' + ITEM + '--nocolor' + RESET + ', color schemes are ignored.')
       },
-      usage: '[' + DEFAULT + '[--cs | --colorScheme]' + RESET + ' [' + DEFAULT + 'dark' + RESET + ' | light | powershell | mono | none | '+ Underscore + 'user-scheme' + NoUnderscore + ']]',
-      help: 'Enable a color scheme to colorize stderr output streams.\n' +
-            'By default, a dark theme is used.  You can create your own scheme files.  See dark.scheme for\n' +
-            'more information.  Under OMVS, or with ' + ITEM + '--no-color' + RESET + ', color schemes are ignored.',
+      usage: '[' + DEFAULT + '[--cs | --scheme ' + RESET + ' | ' + DEFAULT + '--colorScheme]' + RESET + ' [' + DEFAULT + 'dark' + RESET + ' | light | powershell | mono | none | '+ Underscore + 'user-scheme' + NoUnderscore + ']]',
+      help: hfmt('Enable a color scheme to colorize the stderr output stream. ' +
+            'By default, a dark theme is used. You can create your own scheme files. See ' +
+            'EjesLibrary/ColorScheme.txt on how to create and change them and EjesLibrary/dark.scheme for ' +
+            'an example. Under OMVS, or with ~--nocolor`, color schemes are ignored. '),
       value: [],
       after: (cmd) => {
           if ( ! fs.existsSync(__dirname + '/EjesLibrary/' + cmd.value[0] + '.scheme')) {
@@ -187,9 +193,9 @@ function main(params) {
         ansiLogOut('all      no       All topics in alphabetic order — use | more for easy viewing')
         cmdlist.showHelp(cmdlist.list)
       },
-      usage: '[-h | --help | --ha | --helpApp][' + DEFAULT + 'usage' + RESET + ' | ' + DEFAULT + 'all' + RESET + ' | ' + DEFAULT + 'refine' + RESET + ' | ' + Underscore + 'topic' + NoUnderscore +']',
-      help: 'Request help on commands.  Specify no argument for usage.\n' +
-            'You can ask for help for any long option name in the usage.\n\n' +
+      usage: '[-h | --help | --ha | --helpApp][' + DEFAULT + 'usage' + RESET + ' | all | refine  | ' + Underscore + 'topic' + NoUnderscore +']',
+      help: hfmt('Request help on commands. Specify no argument for usage. ' +
+            'You can ask for help for any long option name (i.e., specify ~-h usage`, then pick from that list). ' ) + '\n' +
             'EXAMPLE: ' + FLAG + '--help metafilter' + RESET, 
       value: [],
       after: (cmd) => {
@@ -203,6 +209,7 @@ function main(params) {
             if ( typeof cmdlist[key[0]] != 'function' && cmdlist[key[0]].help )
               topics.push(key[0])
           }
+          ansiLogOut(HardReset + RESET + ClearLine)
           topics.sort().forEach((topic) => { cmdlist.showHelp(cmdlist[topic], true) })
         }
         else if (cmdlist[cmd.value]) 
@@ -226,8 +233,8 @@ function main(params) {
       tokens: [], defaultValue: 'status', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
       list: false, 
       usage: '[[-u | ' + DEFAULT + '--use' + RESET + '] [' + DEFAULT + 'status' + RESET + ' | ' + Underscore + 'table' + NoUnderscore + '] ]',
-      help: 'Specify the primary table to use or output if the default table is not\n' +
-            'desired.  For a list of arguments, use ' + FLAG + '--use list' + RESET + '.\n\n' +
+      help: hfmt('Specify the primary table to use or output if the default table is not ' +
+            'desired. For a list of arguments, use ~--use list`. ') + '\n' +
             'EXAMPLE:  ' + FLAG + '--use activity' + RESET,
       value: []
     },
@@ -236,12 +243,12 @@ function main(params) {
       tokens:  [], defaultValue: 's', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 1,
       list: false, 
       usage: '[[-t | --table] [' + DEFAULT + Underscore + 'table-default' + NoUnderscore + RESET + ' | ' + Underscore + 'table' + NoUnderscore + ']]... ',
-      help: 'Specify a child table to use or to output.  Specify an argument value if the\n' +
-            'default table is not desired.  If multiple rows are selected (shown in the table),\n' + 
-            'only the first row will be output.  Use ' + FLAG + '--help refine' + RESET + ' for how to select rows.\n\n' +
-            'For a context list of tables, use ' + FLAG + '--table list' + RESET + '.\n' +
-            'Repeatable option.  Specify ' + FLAG + '--help repeat' + RESET + ' for additional information.\n\n' +
-            'EXAMPLE:  ' + FLAG + '--table q' + RESET + '    (Output descriptors from DSSTAT)',
+      help: hfmt('Specify a child table to use or to output. Specify an argument value if the ' +
+            'default table is not desired. If multiple rows are selected (shown in the table), ' + 
+            'only the first row will be output. Use ~--help refine` for how to select rows. ') + '\n' +
+            hfmt('For a context-sensitive list of tables and the default, use ~--table list`. ') +
+            hfmt('Repeatable option. Specify ~--help repeat` for additional information. ') + '\n' +
+            'EXAMPLE:  ' + FLAG + '--table q' + RESET + '    (Output descriptors from the DSSTAT table)',
     levels: 1, value: []
     },
     report: {
@@ -249,12 +256,12 @@ function main(params) {
       tokens:  [], defaultValue: 'b', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 1,
       list: false,
       usage: '[[-r | --report] [' + DEFAULT + Underscore + 'browse-default' + NoUnderscore + RESET + ' | ' + Underscore + 'report' + NoUnderscore + ']]',
-      help: 'Specify a report to output.  Provide an argument value if the default\n' +
-            'report is not desired.  If multiple rows are selected (shown in the table\n' + 
-            'shown without using ' + FLAG + '--report' + RESET + '), only the first row will be output.\n' + 
-            'Use ' + FLAG + '--help refine' + RESET + ' for how to select rows.\n\n' +
-            'For a context list of reports, use ' + FLAG + '--report list' + RESET + '.\n\n' +
-            'EXAMPLE:  ' + FLAG + '--report du' + RESET + '    (Dataset Control Blocks from STATUS)',
+      help: hfmt('Specify a report to output. Provide an argument value if the default ' +
+            'report is not desired. If multiple rows are selected (shown in the table ' + 
+            'shown without using ~--report`), only the first row will be output as a report.  ') + '\n' + 
+            hfmt('Use ~--help refine` for how to select rows. ' +
+            'For a context-sensitive list of reports and the default, use ~--report list`. ') + '\n' +
+            'EXAMPLE:  ' + FLAG + '--report du' + RESET + '    (Dataset Control Blocks from the STATUS table)',
       value: []
     },
     job: {  
@@ -269,8 +276,8 @@ function main(params) {
         ansiLogOut('off      no       Placeholder; parent setting or default is used')
       },
       usage: '[' + DEFAULT + '--job' + RESET + ' [' + DEFAULT + 'yes' + RESET + ' | no | off]]',
-      help: 'Disable selecting batch jobs for applicable displays by specifying "no".\n' +
-            'Selecting jobs is enabled by default.\n\n' +
+      help: hfmt('Disable selecting batch jobs for applicable displays by specifying ~no`. ' +
+            'Selecting jobs is enabled by default. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--job no' + RESET,
       value: [],
       after: (cmd) => cmdlist.invalidArgument(cmd)
@@ -280,8 +287,8 @@ function main(params) {
       tokens: ['yes', 'no', 'off'], defaultValue: 'yes', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 1,
       list: false, doList: (cmd) => { cmdlist.job.doList(cmd) },
       usage: '[' + DEFAULT + '--stc' + RESET + ' [' + DEFAULT + 'yes' + RESET + ' | no | off]]',
-      help: 'Disable selecting started tasks for applicable displays by specifying\n' +
-            '"no".  Selecting started tasks is enabled by default..\n\n' +
+      help: hfmt('Disable selecting started tasks for applicable displays by specifying ' +
+            '~no`.  Selecting started tasks is enabled by default. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--stc no' + RESET,
       value: [],
       after: (cmd) => cmdlist.invalidArgument(cmd)
@@ -291,8 +298,8 @@ function main(params) {
       tokens: ['yes', 'no', 'off'], defaultValue: 'yes', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 1,
       list: false, doList: (cmd) => { cmdlist.job.doList(cmd) },
       usage: '[' + DEFAULT + '--atx' + RESET + ' [' + DEFAULT + 'yes' + RESET + ' | no | off]]',
-      help: 'Disable selecting APPC/MVS transaction jobs by specifying "no".\n' +
-            'Selecting APPC/MVS transaction jobs is enabled by default.\n\n' +
+      help: hfmt('Disable selecting APPC/MVS transaction jobs by specifying ~no`. ' +
+            'Selecting APPC/MVS transaction jobs is enabled by default. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--atx no' + RESET,
       value: [],
       after: (cmd) => cmdlist.invalidArgument(cmd)
@@ -302,8 +309,8 @@ function main(params) {
       list: false, doList: (cmd) => { cmdlist.job.doList(cmd) },
       tokens: ['yes', 'no', 'off'], defaultValue: 'yes', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 1,
       usage: '[' + DEFAULT + '--tsu' + RESET + ' [' + DEFAULT + 'yes' + RESET + ' | no | off]]',
-      help: 'Disable selecting TSO user output for applicable displays by specifying\n' + 
-            '"no".  Selecting TSO user output is enabled by default.\n\n' +
+      help: hfmt('Disable selecting TSO user output for applicable displays by specifying ' + 
+            '~no`.  Selecting TSO user output is enabled by default. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--tsu no' + RESET,
       value: [],
       after: (cmd) => cmdlist.invalidArgument(cmd)
@@ -318,8 +325,8 @@ function main(params) {
         ansiLogOut('off    no        Placeholder; parent setting or default is used')
       },
       usage: '[[-j | --jobname] [off | ' + Underscore + 'jobname' + NoUnderscore + '...]',
-      help: 'Establish job name filter masks.  Filters these tables: activity, input, hold,\n' +
-            'writer (output), nje, status, and mds.\n\n' +
+      help: hfmt('Establish job name filter masks. Filters these tables: activity, input, hold, ' +
+            'writer (output), nje, status, and mds. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--jobname myjob cics*' + RESET,
       value: []
     },
@@ -333,11 +340,11 @@ function main(params) {
         ansiLogOut(Underscore + 'sysout-class' + NoUnderscore + '  yes       1 t0 8 one-character class names, not separated by spaces')
         ansiLogOut('off           no        Placeholder; parent setting or default is used')
       },
-      help: 'Establish sysout class filtering.  Filters these tables: hold, hold datasets,\n' +
-            'writer (output), writer datasets, job status, job status datasets,\n' +
-            'and job zero.  Up to 8 one-character classes may be specified\n' +
-            'without spaces.\n' +
-            'Repeatable option.  Specify ' + FLAG + '--help repeat' + RESET + ' for additional information.\n\n' +
+      help: hfmt('Establish sysout class filtering. Filters these tables: hold, hold datasets, ' +
+            'writer (output), writer datasets, job status, job status datasets, ' +
+            'and job zero. Up to 8 one-character classes may be specified ' +
+            'without spaces. ') + '\n' +
+            hfmt('Repeatable option.  Specify ~--help repeat` for additional information. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--sysclass abc' + RESET,
       value: []
     },
@@ -351,11 +358,11 @@ function main(params) {
         ansiLogOut('off    no        Placeholder; parent setting or default is used')
       },
       usage: '[--dest [' + DEFAULT + 'off' + RESET + ' | ' + Underscore + 'destination' + NoUnderscore + '...]]',
-      help: 'Establish destination filtering.  Filters these tables: hold, hold datasets,\n' +
-            'writer (output), writer datasets, job status, job status datasets,\n' +
-            'and job zero.  Up to 4 destination masks may be specified.\n' +
-            'Repeatable option.  Specify ' + FLAG + '--help repeat' + RESET + ' for additional information.\n\n' +
-            'EXAMPLE: --dest la n*' + RESET,
+      help: hfmt('Establish destination filtering. Filters these tables: hold, hold datasets, ' +
+            'writer (output), writer datasets, job status, job status datasets, ' +
+            'and job zero. Up to 4 destination masks may be specified. ') + '\n' +
+            hfmt('Repeatable option.  Specify ~--help repeat` for additional information. ') + '\n' +
+            'EXAMPLE: ' + FLAG + '--dest la n*' + RESET,
       value: []
     },
     usr: {
@@ -363,9 +370,9 @@ function main(params) {
       tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 8,
       list: false, doList: (cmd) => { cmdlist.jobname.doList(cmd) },
       usage: '[[--usr | --userid] [' + DEFAULT + 'off' + RESET + ' | ' + Underscore + 'username' + NoUnderscore + '...]]',
-      help: 'Establish submitter user ID filtering.  Filters these tables: activity, input, hold,\n' +
-            'writer (output), job status, mds, and nje.  Up to 4 user ID masks may\n' +
-            'be specified.\n\n' +
+      help: hfmt('Establish submitter user ID filtering. Filters these tables: activity, input, hold, ' +
+            'writer (output), job status, mds, and nje. Up to 4 user ID masks may ' +
+            'be specified. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--usr myuid other*' + RESET,
       value: []
     },
@@ -374,9 +381,9 @@ function main(params) {
       tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 4,
       list: false, doList: (cmd) => { cmdlist.dest.doList(cmd) },
       usage: '[--origin [' + DEFAULT + 'off' + RESET + ' | ' + Underscore + 'origin' + NoUnderscore + '...]]',
-      help: 'Establish job origin filtering on.  Filters these tables: activity, input, hold,\n' +
-            'writer (output), job status, mds, and nje.  Up to 4 origin masks may\n' +
-            'be specified.\n\n' +
+      help: hfmt('Establish job origin filtering on. Filters these tables: activity, input, hold, ' +
+            'writer (output), job status, mds, and nje. Up to 4 origin masks may\ ' +
+            'be specified. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--origin la n*' + RESET,
       value: []
     },
@@ -385,9 +392,9 @@ function main(params) {
       list: false, doList: (cmd) => { cmdlist.dest.doList(cmd) },
       tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 4,
       usage: '[--jobclass [' + DEFAULT + 'off' + RESET + ' | ' + Underscore + 'jobclass' + NoUnderscore + '...]]',
-      help: 'Establish job class filtering.  Filters these tables: activity, input, hold,\n' +
-            'writer (output), job status, mds, and nje.  Up to 4 job classes masks\n' +
-            'may be specified.\n\n' +
+      help: hfmt('Establish job class filtering. Filters these tables: activity, input, hold,' +
+            'writer (output), job status, mds, and nje. Up to 4 job classes masks ' +
+            'may be specified. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--jobclass cl1 p*' + RESET,
       value: []
     },
@@ -396,13 +403,13 @@ function main(params) {
       tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 8,
       list: false, doList: (cmd) => { cmdlist.jobname.doList(cmd) },
       usage: '[[-o | ' + DEFAULT + '--owner' + RESET + '] [' + DEFAULT + Underscore + 'your-userid' + NoUnderscore + RESET + ' | off | ' + Underscore + 'ownername' + NoUnderscore + '...]]',
-      help: 'Establish owning user ID filtering.  Filters these tables: activity, input,\n' +
-            'hold, writer (output), job status, mds, and nje.  Up to 8 owner ID\n' +
-            'masks may be specified.  If not specified, your user ID will be used.\n' + 
-            'If you user ID automatically used, it will be specified before the\n' + 
-            'display is invoked, otherwise after to allow use of primary, system,\n' +
-            'and display-specifc criteria to operate as expected.\n\n' +
-            'EXAMPLE: ' + FLAG + '--owner anuid other*' + RESET,
+      help: hfmt('Establish owning user ID filtering. Filters these tables: activity, input, ' +
+            'hold, writer (output), job status, mds, and nje. Up to 8 owner ID ' +
+            'masks may be specified. If not specified, your user ID will be used. ' + 
+            'If your user ID automatically used, it will be specified before the ' + 
+            'display is invoked, otherwise after to allow use of primary, system, ' +
+            'and display-specifc criteria to operate as expected. ') + '\n' +
+            'EXAMPLE: ' + FLAG + '--owner janepgmr other*' + RESET,
       value: [], setUser: () => {
         if ( cmdlist.owner.value.length == 0) { // If 'off' or something else is specified...
           cmdlist.owner.value.push('&uid')  // ... use the logged-off user ID to establish the primary owner filter for usablity.
@@ -445,9 +452,9 @@ function main(params) {
       },
       usage: ' [[' + DEFAULT + '--codepage' + RESET + ' | --cp] [' + Underscore + 'codepage' + NoUnderscore +' | ' +  DEFAULT + '1047' + RESET + ' ]]',
       help: 'Change the code page set for your installation for output as UTF-8.\n\n' +
-            'Codepage 1047 for Latin 1 Open Systems is the default page.\n' +
-            'Note that not all consoles support the proper display of UTF-8\n' +
-            'characters.\n' +
+            hfmt('Codepage 1047 for Latin 1 Open Systems is the default page. ' +
+            'Note that not all consoles support the proper display of UTF-8 ' +
+            'characters. ') + '\n' +
             'For a list of arguments, specify "list".\n\n' +
             'EXAMPLE: ' + FLAG + '--codepage 424' + RESET,
       value: [],
@@ -464,9 +471,9 @@ function main(params) {
         ansiLogOut('all           yes       The column width will not be truncated; default for redirected output')
         ansiLogOut('number        no        Positive non-zero width in characters')
       },
-      help: 'Use --width to specify the character width of a line.  If output is\n' +
-            'redirected and --width is not specified, the width of the console\n' +
-            'will be used.\n\n' +
+      help: hfmt('Use ~--width` to specify the character width of a line. If output is ' +
+            'redirected and ~--width` is not specified, the width of the console ' +
+            'will be used. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--width 132' + RESET,
       value: [], 
       valueTable:  widthTable,
@@ -490,10 +497,10 @@ function main(params) {
         ansiLogOut('number        no        Positive non-zero number of allowed rows or lines')
       },
       usage: '[[-y |--lines] [' + DEFAULT + '1000' + RESET + ' | ' + DEFAULT + Underscore + 'tty-default' + NoUnderscore + RESET + '] | ' + Underscore + 'number' + NoUnderscore + ' | all]',
-      help: 'Use ' + FLAG + '--lines' + RESET + ' to specify the maximum number of lines in a table or report.\n' +
-            'You can also specify ' + FLAG + '--lines all' + RESET + ' to output all lines available.' +
-            'If output is not redirected and --lines is not specified, the number\n' +
-            'lines of the console will be used.  Header lines are counted as well as data lines.\n\n' +
+      help: hfmt('Use ~--lines` to specify the maximum number of lines in a table or report. ' +
+            'You can also specify ~--lines all` to output all lines available. ' +
+            'If output is not redirected and ~--lines` is not specified, the number ' +
+            'lines of the console will be used. Header lines are counted as well as data lines. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--lines 60' + RESET,
       value: [], 
       maxLines: maxLines,
@@ -538,6 +545,45 @@ function main(params) {
       'EXAMPLE: ' + FLAG + '--version' + RESET,
       value: []
     },
+    jes2: {  
+      short: '-2', long: '--jes2',
+      tokens: [], defaultValue: 'false', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value     Default  Description   (' + item + ')')
+        ansiLogOut('--------  -------  -----------')
+        ansiLogOut('<omitted> no       Prefer JES2 in a sysplex that also has JES3 or JES3plus running')
+      },
+      usage: '[--jes2]',
+      help: hfmt('When logging on, use the JES2 spooler instead of the default spooler. ') + '\n' +
+      'EXAMPLE: ' + FLAG + '--jes2' + RESET,
+      value: []
+    },
+    jes3: {  
+      short: '-3', long: '--jes3', camel: '--jes3plus',
+      tokens: [], defaultValue: 'false', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value     Default  Description   (' + item + ')')
+        ansiLogOut('--------  -------  -----------')
+        ansiLogOut('<omitted> no       Prefer JES3 or JES3plus in a sysplex that also has JES2 running')
+      },
+      usage: '[--jes3]',
+      help: hfmt('When logging on, use the JES3 or JES3plus spooler instead of the default spooler. ') + '\n' +
+      'EXAMPLE: ' + FLAG + '--jes3' + RESET,
+      value: []
+    },
+    version: {  
+      short: '-v', long: '--version', camel: '-V',
+      tokens: [], defaultValue: 'false', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value     Default  Description   (' + item + ')')
+        ansiLogOut('--------  -------  -----------')
+        ansiLogOut('<omitted> no       Verbose version information fetched from host')
+      },
+      usage: '[[-v | --version] [max]]',
+      help: 'Display the version information about (E)JES on the host.\n\n' +
+      'EXAMPLE: ' + FLAG + '--version' + RESET,
+      value: []
+    },
     recfm: {  
       long: '--recfm',
       tokens: [], defaultValue: 'f', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
@@ -547,8 +593,8 @@ function main(params) {
         ansiLogOut('F         yes      Fixed record format')
         ansiLogOut('V         no       Variable length record format')
       },
-      usage: '[[--recfm] [f|v]]',
-      help: 'Set the record format for a submit.\n\n' +
+      usage: '[--recfm [' + DEFAULT + 'f' + RESET + ' | v]]',
+      help: 'Set the record format for a submitted JCL deck.\n\n' +
       'EXAMPLE: ' + FLAG + '--recfm v' + RESET,
       value: []
     },
@@ -560,8 +606,8 @@ function main(params) {
         ansiLogOut('--------  -------  -----------')
         ansiLogOut('unitname  no       Generic or esoteric unit name where an uncataloged MVS data set resides.')
       },
-      usage: '[[--unit] [number]]',
-      help: 'Set the generic or esoteric unit name where an uncataloged MVS data set resides for a submitted JCL deck.\n\n' +
+      usage: '[--unit [' + Underscore + 'number' + NoUnderscore + ']]',
+      help: hfmt('Set the generic or esoteric unit name where an uncataloged MVS data set resides for a submitted JCL deck. ') + '\n' +
       'EXAMPLE: ' + FLAG + '--unit VSL001' + RESET,
       value: []
     },
@@ -573,23 +619,23 @@ function main(params) {
         ansiLogOut('--------  -------  -----------')
         ansiLogOut('volser    no       Volume serial where an uncataloged MVS data set resides.')
       },
-      usage: '[[--volume] [volume-id]]',
-      help: 'Set the volume serial where an uncataloged MVS data set resides for a submitted JCL deck.\n\n' +
+      usage: '[--volume [' + Underscore + 'volume-id' + NoUnderscore + ']]',
+      help: hfmt('Set the volume serial where an uncataloged MVS data set resides for a submitted JCL deck. ') + '\n' +
       'EXAMPLE: ' + FLAG + '--volume SYS123' + RESET,
       value: []
     },
     subsys: {  
       long: '--subsys',
-      tokens: ['jes2', 'jes3'], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
+      tokens: ['jes2', 'jes3',], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
       list: false, doList: (item) => {
         ansiLogOut('Value     Default  Description   (' + item + ')')
         ansiLogOut('--------  -------  -----------')
         ansiLogOut('jes2      no       Submit to the JES2 subsystem.')
-        ansiLogOut('jes3      no       Submit to the JES3 subsystem.')
+        ansiLogOut('jes3      no       Submit to the JES3 or JES3plus subsystem.')
       },
-      usage: '[[--subsys] [jes2|jes3]]',
-      help: 'Subsystem name where the job should be sent. If not speficied defaults to the subsystem\n' +
-            'under which the current (E)JES session is running.\n\n' +
+      usage: '[--subsys [jes2 | jes3]]',
+      help: hfmt('Subsystem name where the job should be submitted. If not specified, defaults to the subsystem ' +
+            'under which the current (E)JES session is running. ') + '\n' +
       'EXAMPLE: ' + FLAG + '--subsys jes2' + RESET,
       value: [],
       after: (cmd) => cmdlist.invalidArgument(cmd)
@@ -603,8 +649,8 @@ function main(params) {
         ansiLogOut('80        yes      Logical record length of 80')
         ansiLogOut('number    no       Number specifying a logincal record length')
       },
-      usage: '[[--lrecl] [number]]',
-      help: 'Set the logical record length to use for a submit JCL deck.\n\n' +
+      usage: '[--lrecl [' + DEFAULT + '80' + RESET + ' | ' + Underscore + 'number' + NoUnderscore + ']]',
+      help: 'Set the logical record length to use for a submitted JCL deck.\n\n' +
       'EXAMPLE: ' + FLAG + '--lrecl 132' + RESET,
       value: []
     },
@@ -614,12 +660,17 @@ function main(params) {
       list: false, doList: (item) => {
         ansiLogOut('Value           Default   Description   (' + item + ')')
         ansiLogOut('--------        --------  -----------')
-        ansiLogOut('host arguments  required  Arguments used by host command.  For local submit, use <local:path>')
+        ansiLogOut('path            required  A workstation path* prefaced by "local:", an MVS data set name, or a z/OS unix path name')  
+        ansiLogOut('(*) Arguments documented in the reference guide may also be coded, but not mixed with option switches.')  
         ansiLogOut('\n' + cmdlist.submit.usage + '\n')
       },
-      usage: '[[-sub | --submit] "[local:path|host file] [lrecl(number)] [recfm(fixed|variable)] [unit(unit-id)] [volume(volume-id)] [subsys(jes2|jes3)]"',
-      help: 'Display the version information about (E)JES on the host.\n\n' +
-      'EXAMPLE: ' + FLAG + '--submit "local:IEFPBR14.JCL"' + RESET,
+      usage: '--submit [local:]path    where path is either a workstation path, an MVS data set name, or a z/OS unix path name\n',
+      help: hfmt('Submit a JCL file. Use the options ~--lrecl`, ~--recfm`, ~--subsys`, ~--unit`, and ~--subsys` to configure the submission. ' +
+            'The file can be a local workstation file by prefixing the path with ~local:`.  A MVS data set name or a z/OS unix ' + 
+            'path name is also supported. The environment variable EJES_SUBMIT_PATH is used to provide a path for a local ' +
+            'workstation file if only a file name is provided. When not present, the current working directory is used instead. ') + '\n' +
+      'EXAMPLE: ' + FLAG + '--submit "local:IEFBR14.JCL"\n' + RESET +
+      'EXAMPLE: ' + FLAG + '--submit "a.cntl(iefbr14)"' + RESET,
       value: [],
       after: (cmd) => {
         if ( ! cmd.value[0] || cmd.value[0] == '?' ) {
@@ -643,7 +694,7 @@ function main(params) {
       tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
       list: false,
       usage: '[--ejes-p | --ejes-profile]',
-      help: 'Zowe runtime profile selection.  Use --profile when running under pure node.\n\n' +
+      help: hfmt('Zowe runtime profile selection.  Use ~--profile` when running under pure node. ') + '\n' +
       'EXAMPLE: ' + FLAG + '--ejes-profile jes2' + RESET,
       value: []
     },
@@ -658,10 +709,10 @@ function main(params) {
         ansiLogOut('check    no       Run transaction with --debug 4 on but without enumerating data.')
         ansiLogOut('all      no       Same as check but enumerates data.')
       },
-    help: 'Breakdown optimized host command lists to parcel out individual commands in order to\n' +
-          'view errors and warnings that might  otherwise be missed.  For example, if you were to\n' +
-          'specify a table you were not authorized for or was unsupported, ' + FLAG + '--dry-run' + RESET + ' check\n' +
-          'would reveal an EJES error message that you would not otherwise see.\n' +
+    help: hfmt('Breakdown optimized host command lists to parcel out individual commands in order to ' +
+          'view errors and warnings that might otherwise be missed. For example, if you were to ' +
+          'specify a table you were not authorized for or was unsupported, ~--dry-run check` ' +
+          'would reveal an EJES error message that you would not otherwise see. ') + '\n' +
           'EXAMPLE: ' + FLAG + '--dry-run syntax' + RESET,
       args: ['syntax', 'check', 'all'],
       value: [],
@@ -677,8 +728,8 @@ function main(params) {
         ansiLogOut('off    no       Table output has no header lines')
       },
       usage: '[' + DEFAULT + '--header' + RESET + ' [' + DEFAULT + 'on' + RESET + ' | off]]',
-      help: 'Display header lines in table output (the default).\n' +
-            'Specify "off" to remove headers from output.\n\n' +
+      help: hfmt('Display header lines in table output (the default). ' +
+            'Specify ~--header off` to remove headers from output. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--header off' + RESET,
       value: [],
       after: (cmd) => cmdlist.invalidArgument(cmd)
@@ -686,14 +737,14 @@ function main(params) {
     syscmd: {  
       long: '--syscmd',
       tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: NO_MAX,
-      usage: '[--syscmd system-command]',
+      usage: '[--syscmd ' + Underscore + 'system-command' + NoUnderscore + ']',
       list: false, doList: (item) => {
         ansiLogOut('Value   Description   (' + item + ')')
         ansiLogOut('-----   -----------')
         ansiLogOut('text    A system command prefixed with forward slash')
       },
-      help: 'Use to issue a system command under your credentials.\n' +
-            'Prefix with a forward slash.  Do not use semicolons.\n\n' +
+      help: hfmt('Use to issue a system command under your credentials. ' +
+            'Prefix with a forward slash. Do not use semicolons. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--syscmd /d t' + RESET,
       value: []
     },
@@ -717,7 +768,7 @@ function main(params) {
         }
       },
       usage: '[[--p | --prof | --profile] ' + Underscore + 'profile-name' + NoUnderscore + ']',
-      help: 'Use --profile to specify the (E)JES profile to use.\n\n' +
+      help: hfmt('Use ~--profile` to specify the (E)JES profile to use. ') + '\n' +
       'EXAMPLE: ' + FLAG + '--profile jes3plus' + RESET,
       value: [],
       after: (cmd) => { 
@@ -736,9 +787,9 @@ function main(params) {
         ansiLogOut('user id           Your user ID (usually your TSO logon)')
       },
       usage: '[--user ' + Underscore + 'uid' + NoUnderscore + ']',
-      help: 'Provide user id credential, typically same as for signing on to TSO.\n' +
-            'Please use the ' + FLAG + 'Zowe Profile' + RESET + ' commands instead where possible.\n' +
-            'Pure node users use the ' + FLAG + 'Node Ejes Profiles' + RESET + ' command instead.\n\n' +
+      help: hfmt('Provide user id credential, typically same as for signing on to TSO. ' +
+            'Please use the ~Zowe Profiles` command instead where possible. ' +
+            'Pure node users use the ~Node Ejes Profiles` command instead. ') + '\n' +
       'EXAMPLE: ' + FLAG + '--user johndoe' + RESET,
       value: []
     },
@@ -750,10 +801,10 @@ function main(params) {
         ansiLogOut('----------------  -----------')
         ansiLogOut('password          Your password (usually for your TSO logon)')
       },
-      usage: '[[--pw | --pass | --password] ' + Underscore + 'password' + NoUnderscore + '"]]',
-      help: 'Provide password credential, typically same as for signing on to TSO.\n' +
-            'Please use the ' + FLAG + 'Zowe Profile' + RESET + ' commands instead where possible.\n' +
-            'Pure node users use the ' + FLAG + 'Node Ejes Profiles' + RESET + ' command instead.\n\n' +
+      usage: '[[--pw | --pass | --password] ' + Underscore + 'password' + NoUnderscore + ']]',
+      help: hfmt('Provide password credential, typically same as for signing on to TSO. ' +
+            'Please use the ~Zowe Profiles` command instead where possible. ' +
+            'Pure node users use the ~Node Ejes Profiles` command instead. ') + '\n' +
       'EXAMPLE: ' + FLAG + '--password pi0ria' + RESET,
       value: []
     },
@@ -763,12 +814,12 @@ function main(params) {
       list: false, doList: (item) => {
         ansiLogOut('Value             Description   (' + item + ')')
         ansiLogOut('----------------  -----------')
-        ansiLogOut('host name         The address of (E)JES RESTapi server running on host without https:// or http://')
+        ansiLogOut('host name         The address of (E)JES REST API server running on host without https:// or http://')
       },
-      usage: '[--host ' + Underscore + 'address' + NoUnderscore + '"]]',
-      help: 'Provide host address for the (E)JES RESTapi server.\n' +
-            'Please use the ' + FLAG + 'Zowe Profile' + RESET + ' commands instead where possible.\n' +
-            'Pure node users use the ' + FLAG + 'Node Ejes Profiles' + RESET + ' command instead.\n\n' +
+      usage: '[--host ' + Underscore + 'address' + NoUnderscore + ']]',
+      help: hfmt('Provide the host address for the (E)JES REST API server. ' +
+            'Please use the ~Zowe Profiles` command instead where possible. ' +
+            'Pure node users use the ~Node Ejes Profiles` command instead. ') + '\n' +
       'EXAMPLE: ' + FLAG + '--host zoshost.com' + RESET,
       value: []
     },
@@ -778,12 +829,12 @@ function main(params) {
       list: false, doList: (item) => {
         ansiLogOut('Value             Description   (' + item + ')')
         ansiLogOut('----------------  -----------')
-        ansiLogOut('port number       The port on which (E)JES RESTapi server is waiting for work')
+        ansiLogOut('port number       The port on which (E)JES REST API server is waiting for work')
       },
-      usage: '[--port ' + Underscore + 'address' + NoUnderscore + '"]]',
-      help: 'Provide port address for the (E)JES RESTapi server.\n' +
-            'Please use the ' + FLAG + 'Zowe Profile' + RESET + ' commands instead where possible.\n' +
-            'Pure node users use the ' + FLAG + 'Node Ejes Profiles' + RESET + ' command instead.\n\n' +
+      usage: '[--port ' + Underscore + 'address' + NoUnderscore + ']]',
+      help: hfmt('Provide a port address for the (E)JES REST API server. ' +
+            'Please use the ~Zowe Profiles` command instead where possible. ' +
+            'Pure node users use the ~Node Ejes Profiles` command instead. ') + '\n' +
       'EXAMPLE: ' + FLAG + '--port 7557' + RESET,
       value: []
     },
@@ -796,10 +847,10 @@ function main(params) {
         ansiLogOut('https             The typical protocol for the server')
         ansiLogOut('http              Other protocol for the server')
       },
-      usage: '[--protocol ' + Underscore + 'http[s]' + NoUnderscore + '"]]',
-      help: 'Zowe Specific.  Provide protocol for Zowe ejes log.  Zowe ejes emulate and Zowe ejes query always use https.\n' +
-            'Please use the ' + FLAG + 'Zowe Profile' + RESET + ' commands instead where possible.\n' +
-            'Only HTTPS is supported for pure node use.\n\n' +
+      usage: '[--protocol ' + Underscore + 'http[s]' + NoUnderscore + ']]',
+      help: hfmt('Zowe Specific.  Provide the protocol for Zowe ejes log. ' +
+            'Please use the ~Zowe Profiles` command instead where possible. ' +
+            'Please use only HTTPS. ') + '\n' +
       'EXAMPLE: ' + FLAG + '--protocol https' + RESET,
       value: []
     },
@@ -809,13 +860,14 @@ function main(params) {
       list: false, doList: (item) => {
         ansiLogOut('Value             Description   (' + item + ')')
         ansiLogOut('----------------  -----------')
-        ansiLogOut('path fragment     Path appended to the host component and port to create a fully qualified URL for the (E)JES RESTapi')
+        ansiLogOut('path fragment     Path appended to the host component and port to create a fully qualified URL for the (E)JES REST API')
       },
-      usage: '[--base-path ' + Underscore + 'address' + NoUnderscore + '"]]',
-      help: 'Provide the base path as indicated for the RESTapi documentation or in the Zowe Gateway.\n' +
-            'Please use the ' + FLAG + 'Zowe Profile' + RESET + ' commands instead where possible.\n' +
-            'Pure node users use the ' + FLAG + 'Node Ejes Profiles' + RESET + ' command instead.\n\n' +
-      'EXAMPLE: ' + FLAG + '--base-path /api/v1/ejes' + RESET,
+      usage: '[[--bp | --base-path] ' + Underscore + 'address' + NoUnderscore + ']]',
+      help: hfmt('Provide the base path as indicated for the REST API documentation or in the Zowe Gateway. ' +
+            'Do not include a trailing slash character.  Please use the ~Zowe Profiles` command instead where possible. ' +
+            'Pure node users use the ~Node Ejes Profiles` command instead. ') + '\n' +
+      'EXAMPLE: ' + FLAG + '--base-path /api/v1/ejes' + RESET + '\n' +
+      'EXAMPLE: ' + FLAG + '--base-path /EjesWeb/api' + RESET,
       value: []
     },
     rejectUnauthorized: {
@@ -827,10 +879,10 @@ function main(params) {
         ansiLogOut('true              Reject self-signed certificates')
         ansiLogOut('false             Do not reject self-signed certificates')
       },
-      usage: '[--reject-unauthorized [true | ' + DEFAULT + 'false' + RESET + ']"]]',
-      help: 'All users should code true to reject self-signed certificates.\n' +
-            'Please use the ' + FLAG + 'Zowe Profile' + RESET + ' commands instead where possible.\n' +
-            'Pure node users use the ' + FLAG + 'Node Ejes Profiles' + RESET + ' command instead.\n\n' +
+      usage: '[[--ru | --reject-unauthorized] [' + DEFAULT + 'true' + RESET + ' | false]]]',
+      help: hfmt('All users should code ~true` to reject self-signed certificates. ' +
+            'Please use the ~Zowe Profiles` command instead where possible. ' +
+            'Pure node users use the ~Node Ejes Profiles` command instead. ') + '\n' +
       'EXAMPLE: ' + FLAG + '--reject-unauthorized true' + RESET,
       value: [],
       after: (cmd) => {
@@ -842,9 +894,9 @@ function main(params) {
       tokens: ['on'], defaultValue: 'on', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
       list: false, doList: (item) => { ansiLogOut('This option does not accept arguments.') },
       usage: '[--max]',
-      help: 'Change level of detail to show maximum number of columns on these\n' +
-            'tables: activity, djc, hold, input, job status, nje, and writer.\n' + 
-            'Added columns can be detailed using --max --showcols list.\n\n' +
+      help: hfmt('Change level of detail to show maximum number of columns on these ' +
+            'tables: activity, djc, hold, input, job status, nje, and writer. ' + 
+            'Added columns can be detailed using ~--max --showcols list`. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--max' + RESET,
       value: [],
       after: (cmd) => cmdlist.invalidArgument(cmd)
@@ -854,16 +906,16 @@ function main(params) {
       tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 63,
       list: false,
       usage: '[[-m | --metafilter] [' + DEFAULT + 'off' + RESET + ' | ' + Underscore + 'metafilter_construct' + NoUnderscore + '...]]…',
-      help: 'Establish column filtering for row selection purposes.\n' +
-            'Metafilters may be specified for each table.  Specify --metafilter off\n' +
-            'for any table not filtered for which you will filter a child table.\n' +
-            'Up to 16 metafilters may be specified together with the elements\n' +
-            'separated by spaces.  The format is as follows:\n\n' +
+      help: hfmt('Establish column filtering for row selection purposes. ' +
+            'Metafilters may be specified for each table. Specify ~--metafilter off` ' +
+            'for any table not filtered for which you will filter a child table. ' +
+            'Up to 16 metafilters may be specified together with the elements ' +
+            'separated by spaces. The format is as follows:') + '\n\n' +
             FLAG + 'key' + RESET + " [eq|ne|gt|lt|ge|le] [']value['] [[and | or]  " + FLAG + 'key' + RESET + " [eq|ne|gt|lt|ge|le] [']value[']]...\n\n" +
-            'Neither single- nor double-quotes are are allowed.\n' +
-            'The ' + FLAG + 'key' + RESET + ' value may be the column-key or the native-key.\n' +
-            'Use --metafilter list to view the column-keys and native-keys.\n' +
-            'Repeatable option.  Specify ' + FLAG + '--help repeat' + RESET + ' for additional information.\n\n' +
+            hfmt('Neither single- nor double-quotes are are allowed in a value. ' +
+            'The ~key` value may be the column-key or the native-key. ' +
+            'Use ~--metafilter list` to view the column-keys and native-keys. ' +
+            'Repeatable option. Specify ~--help repeat` for additional information. ') + '\n\n' +
             'EXAMPLE: ' + FLAG + '--metafilter maxcomp eq ab* or maxcomp eq jclerr' + RESET,
       value: []
     },
@@ -871,19 +923,18 @@ function main(params) {
       short: '-z', long: '--sort',
       tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 0, maxArgumentCount: 32,
       list: false,
-      usage: '[' + DEFAULT + '--z' + RESET + ' | ' + DEFAULT + '--sort' + RESET + '[' + DEFAULT + 'off' + RESET + ' | ' + Underscore + 'sort_construct' + NoUnderscore + ']',
-      help: 'Establish column sorting to order rows for easier selection.\n' +
-            'Sorts may be specified for each table.  Specify --sort off\n' +
-            'for any table not sorted for which you will filter a child table.\n' +
-            'Up to 4 column sorts may be specified together with the elements\n' +
-            'separated by spaces.  The format is as follows:\n\n' +
+      usage: '[[' + DEFAULT + '--z' + RESET + ' | ' + DEFAULT + '--sort' + RESET + '] [' + DEFAULT + 'off' + RESET + ' | ' + Underscore + 'sort_construct' + NoUnderscore + ']',
+      help: hfmt('Establish column sorting to order rows to position desired rows at the top of the table. ' +
+            'Sorts may be specified for each table.  Specify ~--sort off` ' +
+            'for any table not sorted for which you will filter a child table. ' +
+            'Up to 4 column sorts may be specified together with the elements ' +
+            'separated by spaces.  The format is as follows: ') + '\n' +
             '[[default [a|d] | name [a|d] | num [a|d] | priority [a|d] | time [a|d] ] | [' + FLAG + 'key' + RESET + ' [a|d]]]]...\n\n' + 
-            'If the value contains spaces, enclose it in single quotes.\n' +
-            'No other use of single quotes is allowed.\n' +
-            'Double-quotes are not allowed to be embedded.\n' +
-            'The ' + FLAG + 'key' + RESET + ' value may be the column-key or the native-key.\n' +
-            'Use --sort list to view the column-keys and native-keys.\n' +
-            'Repeatable option.  Specify ' + FLAG + '--help repeat' + RESET + ' for additional information.\n\n' +
+            hfmt('If the ~key` value (a column name) contains spaces, enclose it in single quotes or abbreviate it. ' +
+            'No other use of single quotes is allowed. ' +
+            'The ~key` value may be the column-key or the native-key. ' +
+            'Use --sort list to view the column-keys and native-keys. ' +
+            'Repeatable option.  Specify ~--help repeat` for additional information. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--sort maxcomp d records a' + RESET,
       value: []
     },
@@ -891,10 +942,10 @@ function main(params) {
       short: '-w', long: '--showcols',
       tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: NO_MAX,
       list: false,
-      usage: '[[-w|--showcols] ' + Underscore + 'column-key' + NoUnderscore + '...]',
-      help: 'Establish the columns and the order of those columns in the displayed\n' +
-            'table.  The specified columns may be the column-key or the native-key.\n' +
-            'Use --showcols list to view the column-keys and native-keys.\n\n' +
+      usage: '[[-w|--showcols] ' + Underscore + 'column' + NoUnderscore + '...]',
+      help: hfmt('Establish the columns and the order of those columns in the displayed ' +
+            'table. The specified columns may be the column-key or the native-key. ' +
+            'Use ~--showcols list` to view the column-keys and native-keys available to use. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--showcols jobname jobid maxcomp status lines' + RESET,
       value: []
     },
@@ -902,28 +953,31 @@ function main(params) {
       long: '--hidecols',
       tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: NO_MAX,
       list: false,
-      usage: '[--hidecols ' + Underscore + 'column-key' + NoUnderscore + '...]',
-      help: 'Subtract columns from columns displayed in the table.  The specified\n' +
-            'columns may be the column-key or the native-key.  The option applies\n' +
-            'only to the displayed table and may be specified only once.  The option\n' +
-            FLAG + '--showcols' + RESET + ' will be used instead if specified.\n' +
-            'Use ' + FLAG + '--hidecols list' + RESET + ' to view the column-keys and native-keys.\n\n' +
-            'EXAMPLE: ' + FLAG + '--showcols jobname jobid maxcomp status lines' + RESET,
+      usage: '[--hidecols ' + Underscore + 'column' + NoUnderscore + '...]',
+      help: hfmt('Subtract columns from columns displayed in the table. The specified ' +
+            'columns may be the column-key or the native-key. The option applies ' +
+            'only to the displayed table and may be specified only once. The option ' +
+            '~--showcols` will be used instead if specified. ' +
+            'Use ~--hidecols list` to view the column-keys and native-keys available to use. ') + '\n' +
+            'EXAMPLE: ' + FLAG + '--hidecols jp curstep numstep stepname records bytes pages ' + RESET,
       value: []
     },
     command: {  
       short: '-c', long: '--command',
       tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
       list: false,
-      usage: '[[-c | --command] [list | command[argument]]',
-      help: 'Issue a command against the selected (displayed) rows of the table.\n' +
-            'A command may include an argument, if allowed, with not intervening\n' +
-            'spaces.  Unless --immediate is also specified, each row will be\n' +
-            'displayed with a yes/no/all/cancel prompt.  The option will only run\n' +
-            'in interactive mode.  Redirected output ' + Underscore + 'is not compatible' + NoUnderscore + '.\n' + 
-            'Use ' + FLAG + '--command list' + RESET + ' to view the availabe commands.\n\n' +
+      usage: '[[-c | --command] [list | ' + Underscore + 'command' + NoUnderscore + '[' + Underscore + 'argument' + NoUnderscore + ']]',
+      help: hfmt('Issue a command against the selected (displayed) rows of the table. ' +
+            'A command may include an argument, if allowed, with no intervening ' +
+            'spaces.  Unless ~--immediate` is also specified, each row will be ' +
+            'displayed with a yes/no/all/cancel prompt.  ~--command`, with or ' +
+            'without ~--immediate`, will only run in interactive mode and is ' +
+            'not allowed if output is redirected. ' + 
+            'Use ~--command list` to view the available commands. ' +
+            'See also ~--confirm`. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--command rmount' + RESET + '   (Reply "mount" on sysreq)\n' +
-            'EXAMPLE: ' + FLAG + '--command c     ' + RESET + '   (Cancel job on status)',
+            'EXAMPLE: ' + FLAG + '--command c     ' + RESET + '   (Cancel job on status)\n' +
+            'EXAMPLE: ' + FLAG + '--command wx    ' + RESET + '   (Requeue to writer class x)',
       value: []
     },
     immediate: {  
@@ -936,16 +990,16 @@ function main(params) {
         ansiLogOut('slow   no       Commands are issued one-by-one and each response is noted')
       },
       usage: '[[-i | --immediate] [' + DEFAULT + 'fast' + RESET + ' | slow]',
-      help: 'When issued in conjunction with ' + FLAG + '--command' + RESET + ', the specified command is\n' +
-            'issued against all selected (displayed) rows of the table without\n' +
-            'exception.  The option is invalid when output is redirected.  Use\n' +
-            FLAG + '--confirm' + RESET + ' instead.\n\n' +
-            'The argument ' + FLAG + 'slow' + RESET + ' waits for a response before issuing the next command,\n' +
-            'allowing command sequencing to be interrupted during command processing.\n' +
-            'The argument ' + FLAG + 'fast' + RESET + ' issues all the commands at one time and is the default.\n' +
-            'Fast processing may fail to issue commands if the system responds with\n' +
-            'an error.  Use ' + FLAG + 'slow' + RESET + ' instead.\n' +
-            Underscore + 'This options intended for use with non-destructive commands.' + NoUnderscore + '\n\n' +
+      help: hfmt('When issued in conjunction with ~--command`, the specified command is ' +
+            'issued against all selected (displayed) rows of the table without ' +
+            'exception. The option is invalid when output is redirected.  Use ' +
+            '~--confirm` instead. ') + '\n' +
+            hfmt('The argument ~slow` waits for a response before issuing the next command, ' +
+            'allowing command sequencing to be interrupted during command processing. ' +
+            'The argument ~fast` issues all the commands at one time and is the default. ' +
+            'Fast processing may fail to issue commands if the system responds with ' +
+            'an error. Use ~slow` instead. ') + '\n' +
+            DEFAULT + 'This option is intended for use with non-destructive commands.' + RESET + '\n\n' +
             'EXAMPLE: ' + FLAG + '--command rmount --immediate  ' + RESET + '  (Reply "mount" to all rows on sysreq)',
       value: [], after: (cmd) => { 
         cmdlist.invalidArgument(cmd)
@@ -961,18 +1015,18 @@ function main(params) {
       list: false, doList: () => { cmdlist.max.doList() },
       tokens: ['on'], defaultValue: 'on', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
       usage: '[--confirm]',
-      help: 'When issued in conjunction with ' + FLAG + '--command' + RESET + ', the CLI queues the keys required\n' +
-            'to find the objects represented by the rows of the presented table.  Inspect\n' +
-            'the table, then run the CLI with only the ' + FLAG + '--confirm' + RESET + ' option to send the\n' +
-            'commands to be processed on the host.  Running the CLI without the\n' +
-            FLAG + '--confirm' + RESET + ' option, or with the ' + FLAG + '--confirm' + RESET + ' option and the ' + FLAG + '--command' + RESET + ' option\n' + 
-            'clears the queue and cancel command processing.  A message is issued to\n' +
-            'indicate queued command were canceled.  (During confirm processing, the\n' +
-            'positional parameter to specify the primary table is ignored.)  Zowe\n' +
-            'users will need to specify ' + FLAG + '--confirm' + RESET + ' on.\n\n' +
+      help: hfmt('When issued in conjunction with ~--command`, the CLI queues the keys required ' +
+            'to find the objects represented by the rows of the presented table.  Inspect ' +
+            'the table, then run the CLI with only the ~--confirm` option to send the ' +
+            'commands to be processed on the host. Running the CLI without the ' +
+            '~--confirm` option, or with the ~--confirm` option and the ~--command` option ' + 
+            'clears the queue and cancel command processing.  A message is issued to ' +
+            'indicate queued commands were canceled.  (During confirm processing, the ' +
+            'positional parameter used to specify the primary table is ignored, even if changed.)  Zowe ' +
+            'users will need to specify ~--confirm on`. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--command c --confirm  ' + RESET + '  (Queue cancel command on status)\n' +
             'EXAMPLE: ' + FLAG + '--confirm' + RESET + '              ' + RESET + '  (Confirm and perform command on status)\n' +
-            'EXAMPLE: ' + FLAG + '<any option or default>' + RESET + '  (Cancel queued comands on status)\n',
+            'EXAMPLE: ' + FLAG + '<any option or default>' + RESET + '  (Cancel queued comands.  Outputs ' + HILITE + 'Queued commands have been canceled' + RESET + ' message)\n',
       value: [],
       after: (cmd) => {
         cmdlist.invalidArgument(cmd)
@@ -987,11 +1041,11 @@ function main(params) {
       tokens: ['on'], defaultValue: 'on', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
       list: false, doList: (item) => { ansiLogOut('This option does not accept arguments.') },
       usage: '[--actpurge]',
-      help: 'Enable cancel/purge commands for executing jobs on job-oriented tables.\n' +
-            'When the option is used, a cancel/purge commands are allowed against any\n' +
-            'job whether executing or not.  It is off when the option is not used\n' +
-            'to help you avoid accidentally canceling an executing job when cleaning\n' +
-            'up your queues.\n\n' +
+      help: hfmt('Enable cancel/purge commands for executing jobs on job-oriented tables. ' +
+            'When the option is used, a cancel/purge commands are allowed against any ' +
+            'job whether executing or not. It is off when the option is not used ' +
+            'to help you avoid accidentally canceling an executing job when cleaning ' +
+            'up your queues. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--actpurge --command c --immediate' + RESET,
       value: [],
       after: (cmd) => cmdlist.invalidArgument(cmd)
@@ -1006,18 +1060,18 @@ function main(params) {
         ansiLogOut('sys    no       Sysplex-wide scope')
       },
       usage: '[--actpurge [' + DEFAULT + 'jes' + RESET + ' | sys]',
-      help: 'Set the data gathering scope for the Activity display.\n' +
-            'The default of ' + FLAG + 'JES' + RESET + ' indicates a JESplex-wide scope. This scope depends on (E)JES\n' +
-            'CAS servers to gather data from other systems and send it back to you. This is the\n' +
-            'most efficient way of obtaining the information because multiple users on the same\n' +
-            'requesting system can share the same CAS request/response flows. JESplex-wide information\n' +
-            'can be obtained using a commercial monitor product, such as IBM’s RMF or BMC’s CMF, or\n' +
-            'using native (E)JES facilities.\n' +
+      help: hfmt('Set the data gathering scope for the Activity display. ' +
+            'The default of ~JES` indicates a JESplex-wide scope. This scope depends on (E)JES  ' +
+            'CAS servers to gather data from other systems and send it back to you. This is the ' +
+            'most efficient way of obtaining the information because multiple users on the same ' +
+            'requesting system can share the same CAS request/response flows. JESplex-wide information ' +
+            'can be obtained using a commercial monitor product, such as IBM’s RMF or BMC’s CMF, or ' +
+            'using native (E)JES facilities. ') +
             '\n' +
-            'A value of ' + FLAG + 'SYS' + RESET + ' indicates a sysplex-wide scope. This scope depends entirely on a\n' +
-            'Monitor II sysplex data gathering service provided by a commercial monitor product,\n' +
-            'even for the current system’s data. Sysplex-wide data cannot be obtained using native\n' +
-            '(E)JES facilities.\n\n' +
+            hfmt('A value of ~SYS` indicates a sysplex-wide scope. This scope depends entirely on a ' +
+            'Monitor II sysplex data gathering service provided by a commercial monitor product, ' +
+            'even for the current system’s data. Sysplex-wide data cannot be obtained using native ' +
+            '(E)JES facilities. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--acplex sys' + RESET,
       value: [],
       after: (cmd) => cmdlist.invalidArgument(cmd)
@@ -1032,11 +1086,11 @@ function main(params) {
         ansiLogOut('off    yes      Disable extra columns')
       },
       usage: '[--curstep]',
-      help: 'Enable the display of current step number, number of steps, and current step name\n' +
-            'information on the JES2 Input and Job Status tables.\n' +
+      help: hfmt('Enable the display of current step number, number of steps, and current step name ' +
+            'information on the JES2 Input and Job Status tables. ') +
             '\n' +
-            'Additional overhead is required to display these columns. This command allows you to\n' +
-            'control that overhead. \n\n' +
+            hfmt('Additional overhead is required to display these columns. This command allows you to ' +
+            'control that overhead. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--curstep on' + RESET,
       value: [],
       after: (cmd) => cmdlist.invalidArgument(cmd)
@@ -1051,15 +1105,17 @@ function main(params) {
         ansiLogOut('off    yes      Show current attributes of devices in setup status')
       },
       usage: '[--setup]',
-      help: 'Control the display of attributes required to setup specific devices on the Printer/Punch display.\n' +
+      help: hfmt('Control the display of attributes required to setup specific devices on the Printer/Punch display. ') +
             '\n' +
-            'With SETUP enabled, the Printer/Punch display shows the required attributes of devices in setup\n' +
-            'status. With SETUP disabled, the Printer/Punch display shows the current attributes of devices in\n' +
-            'setup status. The affected columns are:\n' +
+            hfmt('With SETUP enabled, the Printer/Punch display shows the required attributes of devices in setup ' +
+            'status. With SETUP disabled, the Printer/Punch display shows the current attributes of devices in ' +
+            'setup status. The affected columns are: ') +
             '\n' +
-            'Forms ID   Flash ID                             Stacker Selection\n' +
-            'FCB ID     Copymod ID, TRC, and Hold Request\n' +
-            'UCS ID     Character Arrangement Table IDs\n\n' +
+            '-----------------   ---------------------------------\n' +
+            'Forms ID            Flash ID\n' +
+            'FCB ID              Copymod ID, TRC, and Hold Request\n' +
+            'UCS ID              Character Arrangement Table IDs\n' +
+            'Stacker Selection\n\n' +
             'EXAMPLE: ' + FLAG + '--setup on' + RESET,
       value: [],
       after: (cmd) => cmdlist.invalidArgument(cmd)
@@ -1074,9 +1130,9 @@ function main(params) {
         ansiLogOut('off    yes      Ignore data set entries that have been fully processed in the JES spool')
       },
       usage: '[--deltxt]',
-      help: 'Enable or disable the output of data set entries that have already been fully processed by JES.\n' +
-            'Enabling DELTXT may allow you to recover a canceled or printed data set if it can still be found\n' +
-            'in the JES spool.\n\n' +
+      help: hfmt('Enable or disable the output of data set entries that have already been fully processed by JES. ' +
+            'Using ~--deltxt on` may allow you to recover a canceled or printed data set if it can still be found ' +
+            'in the JES spool. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--deltxt on' + RESET,
       value: [],
       after: (cmd) => cmdlist.invalidArgument(cmd)
@@ -1091,7 +1147,7 @@ function main(params) {
         ansiLogOut('off    yes      Ignore in-stream SYSIN data sets')
       },
       usage: '[--inptxt]',
-      help: 'Enable or disable the output of in-stream SYSIN data sets.\n\n' +
+      help: hfmt('Enable or disable the output of in-stream SYSIN data sets. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--inptxt on' + RESET,
       value: [],
       after: (cmd) => cmdlist.invalidArgument(cmd)
@@ -1106,7 +1162,7 @@ function main(params) {
         ansiLogOut('off    yes      Ignore internal JES data sets')
       },
       usage: '[--systxt]',
-      help: 'Enable or disable output of internal JES data sets\n\n' +
+      help: hfmt('Enable or disable output of internal JES data sets. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--systxt on' + RESET,
       value: [],
       after: (cmd) => cmdlist.invalidArgument(cmd)
@@ -1120,11 +1176,11 @@ function main(params) {
         ansiLogOut('<M><D>  no       Numeric magnitude separator followed by decimal separator.')
         ansiLogOut('\nNOTE: If either separator is a blank, or the numeric separator is a comma, use single quotes (apostrophes).')
       },
-      usage: '[--numchar \'<magnitude>[<decimal>]\]',
-      help: 'Use this option to establish the numeric magnitude and decimal separator character\n' +
-            'to be used when formatting numeric values.\n' +
+      usage: '[--numchar \'' + Underscore + 'magnitude-character' + NoUnderscore + '[' + Underscore + 'decimal-character' + NoUnderscore + ']\']',
+      help: hfmt('Use this option to establish the numeric magnitude and decimal separator character ' +
+            'to be used when formatting numeric values. ') +
             '\n' + 
-            'Enclose in single quotes (apostrophes) to ensure the command parser accepts the argument.\n\n' +
+            hfmt('Enclose in single quotes (apostrophes) to ensure the command parser accepts the argument. ') +'\n' +
             'EXAMPLE: ' + FLAG + '--numchar \',.\'' + RESET,
       value: []
     },
@@ -1147,7 +1203,7 @@ function main(params) {
         ansiLogOut('\nNOTE: If you specify a separator, enclose both arguments in double-quotes.')
       },
       usage: '[--datefmt [yyydd[ [. | -] | [yyyymmdd | yyyyddmm | mmddyyyy | ddmmyyyy] [/ | -]]]',
-      help: 'Customize date formatting.  Issue --datefmt list for more information.\n\n' +
+      help: hfmt('Customize date formatting.  Issue ~--datefmt list` for more information. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--datefmt "yyyyddd ."' + RESET,
       value: [],
       after: (cmd) => cmdlist.invalidArgument(cmd)
@@ -1162,9 +1218,9 @@ function main(params) {
         ansiLogOut('""             Select current system only.  Double-quotes required.')
         ansiLogOut('*              Select all systems.')
       },
-      usage: '[--sysname [<system-mask> | "" | *]]',
-      help: 'Set the server system name filter. This filter limits the systems from which\n' +
-            'peer-to-peer remote server data is gathered.\n\n' +
+      usage: '[--sysname [' + Underscore + 'system-mask' + NoUnderscore + ' | "" | *]]',
+      help: hfmt('Set the server system name filter. This filter limits the systems from which ' +
+            'peer-to-peer remote server data is gathered. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--sysname zosp*' + RESET,
       value: []
     },
@@ -1173,11 +1229,11 @@ function main(params) {
       tokens: ['on'], defaultValue: 'on', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
       list: false, doList: (item) => { ansiLogOut('This option does not accept arguments.') },
       usage: '[--countOnly | --count | --co ]',
-      help: 'When a table or report is selected for output, only output the "Rows available" line.\n' +
-            'Normally output only to stderr, if output is redirected it is also output to stdout.\n' +
-            'Use this option to log only the number of selected rows or lines, not the rows or\n' +
-            'lines themselves.  This option is disabled during command processing and when issuing\n' +
-            'system commands.\n\n' +
+      help: hfmt('When a table or report is selected for output, only output the "Rows available" line. ' +
+            'Normally output only to stderr, if output is redirected it is also output to stdout. ' +
+            'Use this option to log only the number of selected rows or lines, not the rows or ' +
+            'lines themselves. This option is disabled during command processing and when issuing ' +
+            'system commands. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--countOnly' + RESET,
       value: [],
       after: (cmd) => cmdlist.invalidArgument(cmd)
@@ -1187,18 +1243,17 @@ function main(params) {
       tokens: [], defaultValue: 'off', maxOptionRepeat: NO_MAX, minArgumentCount: 1, maxArgumentCount: 2,
       list: false,
       usage: '[[-s | --select] [' + DEFAULT + 'off' + RESET + ' | ' + Underscore + 'select_construct' + NoUnderscore + ']',
-      help: 'Establish table-specific selection criteria for a table.  When ' + FLAG + '--select' + RESET + '\n' +
-            'is specified, ' + FLAG + '--metafilters and other selection criteria, such as\n' +
-            FLAG + '--owner' + RESET + ', ' + FLAG + '--jobname' + RESET + ', ' + FLAG + '--job' + RESET + ', etc., are ignored even if specified.\n\n' +
-            '(E)JES environment symbols and z/OS system symbols may be used with\n' +
-            'specifying the criteria.  Refer to the (E)JES Reference Manual for the\n' +
-            'former and the symbols table (--use symbols) for the latter.  In some\n' +
-            'environments, the ampersand argument must be enclosed in quotes as used\n' +
-            'in the example below.\n\n'+
-            'One or two criteria are available on supported tables.  To specify only\n' +
-            'the second criterian, specify * for the first.\n' +
-            'Use ' + FLAG + '--select list' + RESET + ' to view criteria available for a table, if any.\n' +
-            'Repeatable option.  Specify ' + FLAG + '--help repeat' + RESET + ' for additional information.\n\n' +
+      help: hfmt('Establish table-specific selection criteria for a table. When ~--select` ' +
+            'is specified, ~--metafilters` and other selection criteria, such as ~--owner`, ~--jobname`, ~--job`, etc., are ignored even if specified. ') + '\n' +
+            hfmt('(E)JES environment symbols and z/OS system symbols may be used with ' +
+            'the specifying criteria.  Refer to the (E)JES Reference Manual for the ' +
+            'former and the symbols table (~--use symbols`) for the latter.  In some ' +
+            'environments, the ampersand argument must be enclosed in quotes as used ' +
+            'in the example below. ') + '\n'+
+            hfmt('One or two criteria are available on supported tables.  To specify only ' +
+            'the second criterion, specify * for the first. ' +
+            'Use ~--select list` to view criteria available for a table, if any. ' +
+            'Repeatable option.  Specify ~--help repeat` for additional information. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--select myjob      ' + RESET + ' (Select jobs named "myjob" only on sysreq)\n' +
             'EXAMPLE: ' + FLAG + '--select * j0123456 ' + RESET + ' (Select a specific job by number status)\n' +
             'EXAMPLE: ' + FLAG + '--select *c*        ' + RESET + ' (Select all classes containing "c" on classes)\n' +
@@ -1236,14 +1291,17 @@ function main(params) {
         ansiLogOut(  '      EJES_DOWNLOAD_PATH setting: ' + ITEM + (process.env.EJES_DOWNLOAD_PATH && process.env.EJES_DOWNLOAD_PATH.length > 0 ? process.env.EJES_DOWNLOAD_PATH : HILITE + '<not set>') + '\n' + RESET)       
       },
       usage: '[' + DEFAULT + '--pdf' + RESET + ' [ | <file name or path>]',
-      help: 'Valid only for reports (browsed output).  Request a PDF version of the\n' +
-            'report.  The host supplies a file name that matches the job of data set\n' +
-            'name so an argument is not required.  Optional, supply a file name or a\n' +
-            'full path for output.  If the resultant value is not a full path, the\n' +
-            'file is stored in the current working directory.  If EJES_DOWNLOAD_PATH\n' +
-            'is set in the environment, the value will be prepended instead.  When\n' +
-            'specified and a line count is not specified, entire report will output.\n' +
-            'Will overwrite existing file.  Cannot be used with ' + ITEM + '--text' + RESET + '.',
+      help: hfmt('Valid only for reports (browsed output). Request a PDF version of the ' +
+            'report. If ~--report` is specified but neither ~--pdf` or ~--text` is specified, a textual report is output to stdout. ' +
+            'The host supplies a unique file name derived from name of the spool or host object, ' + 
+            'therefore an argument is not required. However, you may supply a file name or a ' +
+            'full path to use instead. If the supplied value is not a full path, the ' +
+            'file is stored in the current working directory. If EJES_DOWNLOAD_PATH ' +
+            'is set in the environment, its value will be prepended instead of the current working directory. ' + 
+            'The entire report will output unless ~--lines` is specified to limit the output length. ' +
+            'Will overwrite an existing file while displaying a ~File being replaced` message. Cannot be used with ~--text`. ') + 
+            '\n' + 
+            hfmt('Formatting of the output is affected by ~--cc`, ~--lines` and ~~--start. '),
         value: [], after: (cmd) => { 
             if ( cmdlist.text.value[0] && cmdlist.pdf.value[0] ) {
             ansiErrOut(FLAG + '--text' + ERROR + ' and ' + RESET + FLAG + '--pdf' + ERROR + ' may not be used together.' + RESET)
@@ -1264,15 +1322,17 @@ function main(params) {
         ansiLogOut(  '      EJES_DOWNLOAD_PATH setting: ' + ITEM + (process.env.EJES_DOWNLOAD_PATH && process.env.EJES_DOWNLOAD_PATH.length > 0 ? process.env.EJES_DOWNLOAD_PATH : HILITE + '<not set>') + '\n' + RESET)       
       },
       usage: '[' + DEFAULT + '--text | --txt' + RESET + ' [ | <file name or path>]]',
-      help: 'Valid only for reports (browsed output).  Request a text version of the\n' +
-            'report.  Optional.  If not specified, at text report is output to stdout.\n' +
-            'The host supplies a file name that matches the job of data set\n' +
-            'name so an argument is not required.  Optional, supply a file name or a\n' +
-            'full path for output.  If the resultant value is not a full path, the\n' +
-            'file is stored in the current working directory.  If EJES_DOWNLOAD_PATH\n' +
-            'is set in the environment, the value will be prepended instead.  When\n' +
-            'specified and a line count is not specified, entire report will output.\n' +
-            'Will overwrite existing file.  Cannot be used with ' + ITEM + '--pdf' + RESET + '.',
+      help: hfmt('Valid only for reports (browsed output). Request a text file version of the ' +
+            'report.  If ~--report` is specified but neither ~--pdf` or ~--text` is specified, a textual report is output to stdout. ' +
+            'The host supplies a unique file name derived from name of the spool or host object, ' + 
+            'therefore an argument is not required. However, you may supply a file name or a ' +
+            'full path to use instead. If the supplied value is not a full path, the ' +
+            'file is stored in the current working directory. If EJES_DOWNLOAD_PATH ' +
+            'is set in the environment, its value will be prepended instead of the current working directory. ' + 
+            'The entire report will output unless ~--lines` is specified to limit the output length. ' +
+            'Will overwrite an existing file while displaying a ~File being replaced` message. Cannot be used with ~--pdf`. ') + 
+            '\n' + 
+            hfmt('Formatting of the output is affected by ~--cc`, ~--lines` and ~~--start. '),
       value: [], after: (cmd) => { 
         if ( cmdlist.text.value[0] && cmdlist.pdf.value[0] ) {
           ansiErrOut(FLAG + '--text' + ERROR + ' and ' + RESET + FLAG + '--pdf' + ERROR + ' may not be used together.' + RESET)
@@ -1291,83 +1351,85 @@ function main(params) {
       return cmdlist.metafilter.list | cmdlist.sort.list | cmdlist.showcols.list | cmdlist.hidecols.list
     },
     refine: { // This is a help text only cmdlist property.
-      moniker: '"Refining the First Row"',  // This is a title or caption as handled by cmdlist.showHelp()
-      help: 'The number of rows populating a table depends on selection criteria.  The ' + FLAG + '--table' + RESET + '\n' +
-            'and ' + FLAG + '--report' + RESET + ' options operate only on the first row of a table.  To best use these\n' +
-            'options, you must refine what is displayed as the first row.  The ' + FLAG + '--command' + RESET + '\n' +
-            'option operates on all rows.  When using this option, you must refine the set of\n' +
-            'rows populating the table.\n\n' +
-            
-            'Use ' + FLAG + '--metafilter' + RESET + ' to filter rows based on logical tests of the contents of the\n' +
-            'columns of the table.\n' +
-            'Use ' + FLAG + '--sort' + RESET + ' to arrange rows in an order based on the sequencing of the columns.\n' +
-            'Use ' + FLAG + '--select' + RESET + ' to pick specific rows by a characteristic of the most important one\n' +
-            'or two columns of a table.\n\n' +
-            
-            'Primary selection criteria allow you to further refine the table by specifying\n' +
-            'important attributes of a table, usually starting with in the top level parent\n' +
-            'table.  \n\n' +
-
-            'Use ' + FLAG + '--owner' + RESET + ', which defaults to your user ID, to select spool output from specific\n' +
-            'owner IDs. ' + FLAG + '--usr' + RESET + ' works similarly for submitter user IDs without a default.\n' +
-            'Use ' + FLAG + '--atx' + RESET + ', ' + FLAG + '--job' + RESET + ', ' + FLAG + '--stc' + RESET + ', and ' + FLAG + '--tsu' + RESET + ' to remove spool objects you don\'t wish to view.\n' +
-            'Use ' + FLAG + '--jobname' + RESET + ' to specify a single job name, or a set that begin with a prefix.\n' +
-            'Use ' + FLAG + '--jobclass' + RESET + ' and ' + FLAG + '--sysclass' + RESET + ' to refine by job or sysout class.\n' +
-            'Use ' + FLAG + '--dest' + RESET + ' to refine by the destination of the output.\n'
+      moniker: '"Refining the First Row or Selection of Rows"',  // This is a title or caption as handled by cmdlist.showHelp()
+      help: hfmt('The number of rows populating a table depends on selection criteria. The ~--table` ' +
+            'and ~--report` options operate only on the first row of a table.  To best use these ' +
+            'options, you must refine what is displayed as the first row. ') + '\n' +
+            hfmt('The ~--command` ' +
+            'option operates on all rows. When using this option, you must refine the set of ' +
+            'rows populating the table to be only the ones you wish to apply the command. ') + 
+            '\n' +
+            hfmt('Use ~--metafilter` to filter rows based on logical tests of the contents of the ' +
+            'columns of the table. ' +
+            'Use ~--sort` to arrange rows in an order by specifying sequencing of the rows by the contents of up to four columns. ' +
+            'Use ~--select` to pick specific rows by a characteristic of the most important one ' +
+            'or two columns of a table. ') + 
+            '\n' +
+            hfmt('Primary selection criteria allow you to further refine the table by specifying ' +
+            'important attributes of a table, usually starting with the top level parent ' +
+            'table. ') +
+            '\n' +
+            hfmt('Use ~--owner`, which defaults to your user ID, to select spool output from specific ' +
+            'owner IDs. ~--usr` works similarly for submitter user IDs without a default. ' +
+            'Use ~--atx`, ~--job`, ~--stc`, and ~--tsu` to remove spool objects you don\'t wish to view. ' +
+            'Use ~--jobname` to specify a single job name, or a set that begin with a prefix. ' +
+            'Use ~--jobclass` and ~--sysclass` to refine by job or sysout class. ' +
+            'Use ~--dest` to refine by the destination of the output. ')
     },
     repeat: {
       moniker: '"Repeating Options"',
-      help: 'Some options are repeatable options and can be entered multiple times\n' +
-            'on the command line.  When this is done, each repeation affects the\n' +
-            'next child table.  The first instance applies the to top-level parent\n' +
-            "and subsequent instances to each parent's child table.  In the case of\n" +
-            FLAG + '--table' + RESET + ', it specifies the next child table.  This means that if you\n' +
-            'need to specify an option on a child table, you must specify the option\n' +
-            'on its parent.  In some cases this means just specifying the option\n' +
-            'without an argument (' + Underscore + 'but not under Zowe' + NoUnderscore +'), or specifying the option with\n' +
-            'the placeholder argument ' + FLAG + 'off' + RESET + '.  Note while non-repeatable options can be\n' +
-            'specified in any order — and repeatable options can also be specified\n' +
-            'anywhere in the command line — the repeations must be in order\n' +
-            'of parent, child, grandchild, etc.\n' +
+      help: hfmt('Some options are repeatable options and can be entered multiple times ' +
+            'on the command line. When this is done, each repetition affects the ' +
+            'next child table. ') +
             '\n' +
-            'Example: The child table is data set status under status.  Here we\n' +
-            '         we want to display non-JES sysout in the child table.\n' +
+            hfmt('The first instance applies the to top-level parent ' +
+            "and subsequent instances to each parent's child table, for example ~--metafilter`.  This means that if you " +
+            'need to specify an option on a child table, you must specify the option ' +
+            "on its parent also. In cases where you don't need to apply the option to the parent, this means specifying the option there with " +
+            'the placeholder argument ~off`. (If not running under Zowe, you can omit the option argument.) ' +  
+            'Note that while non-repeatable options can be ' +
+            'specified in any order — and repeatable options can also be specified ' +
+            'anywhere in the command line — the repetitions must be in order ' +
+            'of parent, child, grandchild, etc. ') +
+            '\n' +
+            hfmt('Example: The child table is the data set status table under status table.  Here we ' +
+            'we want to display non-JES sysout in the child table, so we use ~--metafilter off` as a placeholder. ') +
             '\n' +
             '  ' + FLAG + 'ejes --table --metafilter off --metafilter ddname ne jes*\n' + RESET +
             '\n' +
-            'Example: The grandchild table is output descriptors of the above example.\n' +
-            '         Here we want to remove columns from the grandchild table.\n' +
-            '         Note that we inserted ' + FLAG + '--table q' + RESET + ' before the metafilters, but in\n' +
-            '         proper order.  ' + FLAG + '--hidecols' + RESET + ' in not repeatable, so we tacked it at\n' +
-            '         the end, but could have placed it anywhere.  The action would be\n' +
-            '         unchanged. The order of repetion matters, not the placement.\n' +
+            hfmt('Example: The grandchild table is output descriptors child table of the above example. ' +
+            'Here we want to remove columns from the grandchild table. ' +
+            'Note that we inserted `--table q` before the metafilters, but in ' +
+            'proper order.  `--hidecols` in not repeatable, so we tacked it at ' +
+            'the end, but could have placed it anywhere.  The action would be ' +
+            'unchanged. The order of repetion matters, not the placement. ') +
             '\n' +
             '  ' + FLAG + 'ejes --table --table q --metafilter off --metafilter ddname ne jes* --hidecols label field' + RESET
     },
     list: { 
       moniker: '"The \'list\' Argument"',
-      help: 'The argument keyword list causes the CLI to list details about all the\n' +
-            'acceptable arguments for a specified option.  This means that when you\n' +
-            'are using an option and you are unsure of the arguments, you type the\n' +
-            'option followed by list, for example, ' + FLAG + '--select list' + RESET + '.  The CLI will\n' +
-            'output to stdout the valid arguments, in this case for the select option.\n' +
-            'Listing is done for any other work.  The following is valid and only the\n' +
-            'valid arguments before ' + FLAG + '--hidecol' + RESET + ' will be output.\n' +
+      help: hfmt('The argument keyword ~list` causes the CLI to list details about all the ' +
+            'acceptable arguments for a specified option. This means that when you ' +
+            'are using an option and you are unsure of the arguments, you type the ' +
+            'option followed by ~list`, for example, ~--select list`.  The CLI will ' +
+            'output to stdout the valid arguments, in this case for arguments for ~--select` option valid for the current table. ' +
+            'After a list is output, the program quits. In the following example, only ' +
+            'arguments for ~--hidecol` are output although the program needs to query the host to do so: ') +
             '\n' +
             FLAG + 'ejes --table --table q --metafilter off --metafilter ddname ne jes* --hidecols ' + ITEM + 'list\n' + RESET +
             '\n' +
-            'There are two types of option lists.  A static list does not change\n' +
-            'regardless of the context in which it is entered.  An example is the\n' +
-            FLAG + '--owner' + RESET + ' option.  The argument list is always the same whether it is\n' +
-            'entered for the top-parent table for the furthest child table.\n' +
+            hfmt('There are two types of option lists. A static list does not change ' +
+            'regardless of the context in which it is entered.  An example is the ' +
+            '~--owner` option.  The argument list is always the same whether it is ' +
+            'entered for the top-parent table for the furthest child table. ') +
             '\n' +
-            'A dynamic list is generated by querying the host after the CLI fetches\n' +
-            'data for a specific table.  For example, ' + FLAG + '--table list' + RESET + ' will return a\n' +
-            'different set of available tables for the tables "status" and "sysreq".\n' +
-            'Some tables, like "outdesc", will return that there are no valid\n' +
-            'arguments and advise not to use the option in that context.\n' +
+            hfmt('A dynamic list is generated by querying the host after the CLI fetches ' +
+            'data for a specific table.  For example, ~--table list` will return a ' +
+            'different set of available child tables for the ~status` and ~sysreq` tables. ' +
+            'Some tables, like ~outdesc`, will return that there are no valid ' +
+            'arguments and advise not to use the option in that context. ') +
             '\n' +
-            'The following options have dynamic lists.  All others are static.\n' +
+            hfmt('The following options have dynamic lists.  All others are static. ') +
             FLAG + '   --command    ' +
             '   --hidecols\n' +
             '   --metafilter ' +
@@ -1378,19 +1440,15 @@ function main(params) {
             '   --table' + RESET
     },
     showHelp: (cmd, doNotExit) => { // FUNCTION: Display help for a property in the cmdlist
-      const { readSchemeFile } = require('./EjesLibrary/ansiScheme.js')
-      readSchemeFile('dark')
       let caption = cmd.long ? (cmd.long + (cmd.short ? ' (SHORT: ' + cmd.short + ')' : '')) : (cmd.moniker ? cmd.moniker : cmdlist.help.value[0])
-      ansiLogOut(HardReset + RESET + INFO + '\n' + 'HELP FOR ' + caption + RESET)
-      ansiLogOut(cmd.help + '\n')
+      ansiLogOut(HardReset + RESET + ClearLine + INFO + '\n' + 'HELP FOR ' + caption + RESET)
+      ansiLogOut(cmd.help + '\n' + ClearLine)
       cmd.usage && ansiLogOut('USAGE: ' + cmd.usage)
       ! doNotExit && term.exitNow(0, true)
     },
     showUsage: () => { // FUNCTION: Shows the usage for the entire help system list of commands.
-      const { readSchemeFile } = require('./EjesLibrary/ansiScheme.js')
-      readSchemeFile('dark')
       const usageOf = (list) => list.forEach((item) => { ansiErrOut(cmdlist[item].usage)})
-      ansiErrOut(HardReset + RESET + 
+      ansiErrOut(HardReset + RESET + ClearLine + 
         'This help applies to "node ejes query".\n' + 
         '"Zowe ejes query" supports a similar syntax and most of the options:  Zowe option arguments\n' +
         'that include spaces must be enclosed in double-quotes.  Use --helpApp instead of --help.\n\n' +
@@ -1403,17 +1461,17 @@ function main(params) {
         'arguments you can use with a specific option.\n' +
         '\n' +
         'USAGE:   ejes [' + DEFAULT + 'query' + RESET + ' | q] [' + Underscore + 'table-name' + NoUnderscore + ' | ' + DEFAULT + 'status' + RESET + '] [' + Underscore + 'options...' + NoUnderscore + '|' + DEFAULT + '--owner ' + Underscore + 'your-userid' + NoUnderscore + RESET + ']\n' +
-        '         ejes [emulate | e] [batch | b] [' + Underscore + 'ejes-batch-options*...' + NoUnderscore + RESET + ']\n' +
+        '         ejes [batch | b] [' + Underscore + 'table-name' + NoUnderscore + ' | shell | cmd] [' + Underscore + 'ejes-batch-options*...' + NoUnderscore + RESET + ']\n' +
         '         ejes profiles** ' + Underscore + 'action' + NoUnderscore + RESET + ' [' + Underscore + 'profile-name' + NoUnderscore + RESET + '] ' + Underscore + 'option...' + NoUnderscore + RESET + '\n' +
         '         *  Note: Ejes batch options are different from those below.  Use "ejes emulate batch --help" to view usage.\n' + 
         '         ** Note: Ejes profiles takes positional parameters and different arguments.  Use "ejes profiles --help" to view usage.\n\n' + 
-        'EXAMPLE: ejes activity             Displays the activity table for your user id.\n' +
-        '         ejes query activity       Same.  Query is required for Zowe.\n' +
-        '         ejes                      Displays the status table for your user id.\n' +
-        '         ejes batch                Enter EJES batch mode.\n' +
-        '         ejes emulate batch        Same.  Emulate is required for Zowe.\n' +
+        'EXAMPLE: ejes query activity       Displays the activity table for your user id.\n' +
+        '         ejes activity             Same (not for use under Zowe).\n' +
+        '         ejes                      Displays the status table for your user id (not for use under Zowe).\n' +
+        '         ejes batch shell          Enter the EJES batch shell.\n' +
+        '         ejes batch                Same (not for use under Zowe).\n' +
         '\nFundamental options\n')
-      usageOf(['scheme', 'debug', 'dryrun', 'help', 'noColor', 'profile', 'user', 'host', 'password', 'port', 'protocol', 'basepath', 'rejectUnauthorized', 'version'])
+      usageOf(['scheme', 'debug', 'dryrun', 'help', 'jes2', 'jes3', 'noColor', 'profile', 'user', 'host', 'password', 'port', 'protocol', 'basepath', 'rejectUnauthorized', 'version'])
       ansiErrOut('\nFunctional options\n');
       usageOf(['report', 'syscmd', 'table', 'countOnly'])
       ansiErrOut('\nCommand options\n\n');
@@ -1428,6 +1486,8 @@ function main(params) {
       usageOf(['lines', 'width'])
       ansiErrOut('\nPrimary selection filters\n')
       usageOf(['dest', 'jobname', 'origin', 'owner', 'jobclass', 'sysclass', 'usr','atx', 'job', 'stc', 'tsu'])
+      ansiErrOut('\nSubmit options\n')
+      usageOf(['lrecl', 'recfm', 'subsys', 'unit', 'volume'])
       term.exitNow(0, true)
     },
     all: () => {
@@ -3004,7 +3064,6 @@ function main(params) {
   })
   options.post.initParms = { cols: 240, rows: 43, userAgent: ejesVersion }
   options.path = ejes.basePath + '/init'
-  
   const { readSchemeFile } = require('./EjesLibrary/ansiScheme.js')
   readSchemeFile(cmdlist.scheme.value[0] || ejes.colorScheme || 'dark')
   let redirected = ! process.stdout.isTTY
@@ -3051,6 +3110,8 @@ function main(params) {
   debug & d_CLIOptionsAndArguments && process.stdout.isTTY && ansiErrOut(INFO + 'Terminal window is ' + ITEM + process.stdout.rows + INFO + ' x ' + ITEM + process.stdout.columns + INFO + '.' + RESET )
   debug & d_CLIOptionsAndArguments && ansiErrOut(INFO + 'Session is ' + ITEM + (process.stdout.isTTY ? 'interactive' : 'redirected') + INFO + '.' + RESET)
 
+  cmdlist.jes2.value.length > 0 && (options.post.initParms.subsystem = 'JES2')
+  cmdlist.jes3.value.length > 0 && (options.post.initParms.subsystem = 'JES3')
   options.post.platformEncoding = cmdlist.codepage.value.length > 0 ? options.post.platformEncoding = cmdlist.codepage.value[0] : '1047'
 
   if ( cmdlist.submit.value.length > 0 ) {
