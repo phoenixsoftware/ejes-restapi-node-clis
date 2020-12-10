@@ -20,6 +20,7 @@ d_NoDebugging = 0
 d_CLIOptionsAndArguments = 1
 d_GeneratedCmdsAndQueries = 2
 d_HostCmds = 4
+d_DisplayNotices = 16
 d_DisplayRowkeys = 32
 d_BatchKeepAlive = 32
 d_RequestAndQuery = 64

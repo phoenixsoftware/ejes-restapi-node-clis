@@ -317,6 +317,136 @@ const term = {
 
 }
 
+function _isLeapYear(date) {
+  var year = date.getFullYear();
+  return (year % 4 ? false : (year % 100 ? true : (year % 400 ? false : true)));
+}
+
+function TODtoDate(ds, f) {
+  function _int(css) {
+    return Math.ceil(parseFloat(css));
+  }
+  function _getDaysInYear(date) {
+    if ( _isLeapYear(date) )
+      return 366;
+    return 365;
+  }
+  function _getDaysInMonth(date) {  // returns date or string with syntax error
+    var d = [ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 ];
+    if ( _isLeapYear(date) )
+      d[1] = 29;
+    return d[date.getMonth()]
+  }
+  var date, g1, g2, j, m, r, t, hour, minute, second, th, month, day, year;
+  t = '([0-9]{2})[\.:]([0-9]{2})([\.:]([0-9]{2})([\.:]([0-9]{2}))?)?';
+  j = '(-([0-9]{4})[-\.]([0-9]{3}))?';
+  g1 = '(-([0-9]{4})[-/]([0-9]{2})[-/]([0-9]{2}))?';
+  g2 = '(-([0-9]{2})[-/]([0-9]{2})[-/]([0-9]{4}))?';
+  r = '^'+t+'('+j+(f == 'YYYYDDD' ? '' : '|'+(f == 'YYYYMMDD' ? g1 : g2))+')?$';
+  r = new RegExp(r);
+  m = ds.match(r);
+  if ( m != null ) {
+      date = new Date();
+      year = date.getFullYear();
+      month = date.getMonth()+1;
+      day = date.getDate();
+      hour = minute = second = th = 0;
+      if ( ! ( ! m[9] || ! m[10] ) )
+          f = 'YYYYDDD';
+      switch (f) {
+          case 'YYYYDDD':                    year = (! m[9]  ? year : _int(m[9]));   break;
+          case 'YYYYMMDD':                   year = (! m[12] ? year : _int(m[12]));  break;
+          case 'MMDDYYYY': case 'DDMMYYYY':  year = (! m[18] ? year : _int(m[18]));  break;
+      }
+      if ( year < 1970 || year > 2045 )
+          return 'Year out of range: ' + year;
+      hour = _int(m[1]);
+      minute = _int(m[2]);
+      second = ! m[4] ? second : _int(m[4]);
+      th = ! m[6] ? th : _int(m[6]);
+      if ( hour > 23 || minute > 59 || second > 59 )
+          return 'Hour, minute, or second out of range: ' + hour + ':' + minute + ':' + second;
+      if ( f == 'YYYYDDD' ) {
+          day = _int(m[10]);
+          if ( day < 1 || day > _getDaysInYear(new Date(year,0,1)) )
+              return 'Day of year out of range: ' + day;
+          month = 1;
+      }
+      else {
+          switch (f) {
+          case 'YYYYMMDD':
+              month = ! m[13] ? month : _int(m[13]);
+              day = ! m[14] ? day : _int(m[14]);
+              break;
+          case 'MMDDYYYY':
+              month = ! m[16] ? month : _int(m[16]);
+              day = ! m[17] ? day : _int(m[17]);
+              break;
+          case 'DDMMYYYY':
+              day = ! m[16] ? day : _int(m[16]);
+              month = ! m[17] ? month : _int(m[17]);
+              break;
+          }
+          if ( month < 1 || month > 12 )
+              return 'Month not 1-12: ' + month;
+          if ( day < 1 || day > _getDaysInMonth(new Date(year,month-1,1)) )
+              return 'Day ' + day + ' invalid for month ' + month;
+      }
+      date = new Date(year, month-1, day, hour, minute, second, th*10);
+      return date;
+  }
+  return false;
+}
+
+function TODtoString(tod, format, sep) {
+  function _getJulianDays(date) {
+    var d, i, m, n;
+    d = [ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 ];
+    if ( _isLeapYear(date) )
+        d[1] = 29;
+    m = date.getMonth();
+    for ( i = 0, n = 0 ; i < m ; i++ )
+        n += d[i];
+    return (n + date.getDate());
+  }
+  var format, sep, date, day, hour, minute, month, second, th, year;
+  date = new Date(parseFloat(tod));
+  year = '0000' + date.getFullYear();
+  year = year.substring(year.length-4)
+  month = '00' + (date.getMonth()+1);
+  month = month.substring(month.length-2)
+  day = '00' + date.getDate();
+  day = day.substring(day.length-2)
+  hour = '00' + date.getHours();
+  hour = hour.substring(hour.length-2)
+  minute = '00' + date.getMinutes();
+  minute = minute.substring(minute.length-2)
+  second = '00' + date.getSeconds();
+  second = second.substring(second.length-2)
+  th = '000' + date.getMilliseconds();
+  th = th.substring(th.length-3, th.length-1)
+  switch (format) {
+  case 'YYYYDDD':
+      date = new Date(_int(year), _int(month)-1, _int(day));
+      day = '000'+_getJulianDays(date);
+      day = day.substring(day.length-3);
+      date = hour+':'+minute+':'+second+'.'+th+'-'+year+sep+day;
+      break;
+  case 'MMDDYYYY':
+      date = hour+':'+minute+':'+second+'.'+th+'-'+month+sep+day+sep+year;
+      break;
+  case 'DDMMYYYY':
+      date = hour+':'+minute+':'+second+'.'+th+'-'+day+sep+month+sep+year;
+      break;
+  case 'YYYYMMDD':
+  default:
+      date = hour+':'+minute+':'+second+'.'+th+'-'+year+sep+month+sep+day;
+      break;
+  }
+  return date;
+}
+
+
 module.exports = {
   abbreviateNumber,
   debugRequest,
@@ -332,6 +462,8 @@ module.exports = {
   term,
   writeProfileFile,
   inFile,
-  outFile
+  outFile,
+  TODtoDate,
+  TODtoString
 }
 

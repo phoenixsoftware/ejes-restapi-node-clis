@@ -16,7 +16,7 @@ const {writeJsonResponse, setZoweParams, isPureNode, setExitCode, setErrStrip, s
 require('./EjesLibrary/debugCodes.js')
 function main(params) {
 
-  const ejesVersion = 'EJES Query, a CLI component of (E)JES.  V0.4.11'
+  const ejesVersion = 'EJES Query, a CLI component of (E)JES.  V0.4.12'
   const auth = require('./EjesLibrary/auth')
   const { debugRequest, debugResponse, getClientDateStamp, term, JSONparse } = require('./EjesLibrary/common.js')
   const https = require('https')
@@ -95,6 +95,7 @@ function main(params) {
         ansiLogOut('1        yes    Command line options and arguments')
         ansiLogOut('2        yes    Generated host commands amd queries')
         ansiLogOut('4        yes    Host commands (must also specify --dry-run)')
+        ansiLogOut('16       no     Display filter, option, and view notices')
         ansiLogOut('32       no     Display command row keys in tabular output')
         ansiLogOut('64       no     Request and query')
         ansiLogOut('128      no     Response headers')
@@ -741,12 +742,17 @@ function main(params) {
       list: false, doList: (item) => {
         ansiLogOut('Value   Description   (' + item + ')')
         ansiLogOut('-----   -----------')
-        ansiLogOut('text    A system command prefixed with forward slash')
+        ansiLogOut('text    A system command up to 127 characters and prefixed with forward slash')
       },
       help: hfmt('Use to issue a system command under your credentials. ' +
             'Prefix with a forward slash. Do not use semicolons. ') + '\n' +
             'EXAMPLE: ' + FLAG + '--syscmd /d t' + RESET,
-      value: []
+      value: [], after: (cmd) => { 
+        if ( cmd.value[0].length > 127 ) {
+          ansiErrOut(ERROR + 'The argument of ' + FLAG + '--syscmd' + ERROR + ' exceeds ' + FLAG + '127' + ERROR +' characters.' + RESET)
+          term.exitNow(76, true)
+        }
+      }
     },
     profile: {  
       long: '--profile', camel: '--prof', short: '-p',
@@ -1604,7 +1610,7 @@ function main(params) {
   /* logoff() callback customization for common.term object */
 
   term.logoffPreamble = outputReportObj
-  term.logoffOrTerminate = function(param) { return cmdlist.command.value.length > 0 && ! (param && parm.force) }
+  term.logoffOrTerminate = function(parm) { return cmdlist.command.value.length > 0 && ! (parm && parm.force) }
   term.logoffTerminate = function() { return debug & d_LogoffCancelEndOfData && ansiErrOut(DEBUG + "Command pending, logoff deferred." + RESET) }
   term.logoffIsDownload = function() { return isDownload }
   term.logoffRequestEnd = writeJsonResponse 
@@ -1978,6 +1984,8 @@ function main(params) {
       return true
     }
     debug & d_LogoffCancelEndOfData && ansiErrOut(DEBUG + "More lines?" + RESET)
+    if ( lineOutCount > cmdlist.lines.maxLines ) 
+      return true
     return false
   }
 
@@ -2002,9 +2010,10 @@ function main(params) {
           var json = JSONparse(data, 'sendCommandRequest');
           if ( debug & d_JSONResponseInspector )
             ansiErrOut(DEBUG + 'Response #' + options.request + '\n' + RESET + util.inspect(JSONparse(data, 'sendCommandRequest-response'), true, 10, true))   
-          if ( listError(json) ) {
-            if ( locate.length > 0 ) {
-              ansiErrOut(INFO + "Command failed.  Skipping  Req status: " + ITEM + json.statusMessage + INFO + ", Elapsed: " + ITEM + json.elapsed + INFO + ", Return code: " + ITEM + json.returnCode + RESET )
+          if ( listError(json) || json.status != 200 ) {
+            if ( locate.length > 0 || json.status != 200 ) {
+              ansiErrOut(INFO + "Command failed" + (json.status != 200 ? "(" + ITEM + json.status + INFO + ")" : "") + ".  Skipping.  Req status: " + ITEM + (json.statusMessage || 'Not provided') + INFO + ", Error: " + ITEM + (json.errorMessage || 'Not provided') + INFO + ", Elapsed: " + ITEM + ( json.elapsed || 'Not provided') + INFO + ", Return code: " + ITEM + (json.returnCode || 'Not provided.') + RESET )
+              json.status != 200 && (promptCount = keyPrompts.length) // Cause callback process to quit if not 200.
               callback()
               return
             }
@@ -2142,6 +2151,7 @@ function main(params) {
   function table(res, data) {
     if ( res.headers['content-type'].indexOf('json') > 0 ) {
       var json = JSONparse(data, 'table');
+      json.notice && ansiErrOut(DEBUG + 'notice: ' + RESET + util.inspect(json.notice, { depth: 10, colors: true, maxArrayLength: 100, compact: true, breakLength: 400}))
       if ( json.position )
         if ( listError(json) )
           return
@@ -2211,7 +2221,7 @@ function main(params) {
           options.path += options.query
           makeRequest(options, func)
           return   
-      }
+        }
     }
     report(res, data)
   }
@@ -2225,6 +2235,7 @@ function main(params) {
       return
     }
     var json = JSONparse(data, 'report')
+    json.notice && ansiErrOut(DEBUG + 'notice: ' + RESET + util.inspect(json.notice, { depth: 10, colors: true, maxArrayLength: 100, compact: true, breakLength: 400}))
     if ( listError(json) ) {
       term.logoff()
       return
@@ -2581,10 +2592,32 @@ function main(params) {
 
   const cmds = { 
     list: [],
-    push: (command) => { cmds.list.push(command); return cmds },
+    push: (command) => {
+      if ( command.length > 127 ) {
+        ansiErrOut(ERROR + 'Options compiled down to a host command created a command that exceeds a 127-character host limit.')
+        ansiErrOut(MSG + 'Check option arguments to simplify.  Ensure correct placement of double-quotes.')
+        ansiErrOut(MSG + 'If problem persists, contact technical support.')
+        ansiErrOut(FLAG + 'Compiled command: ' + ITEM + command + RESET)
+        term.exitNow(75)
+        return cmds
+      }
+      cmds.list.push(command); 
+      return cmds 
+    },
     pop: (all) => { 
       if ( all ) { 
         var r = cmds.toString();
+        if ( r.length > 127 ) {
+          stack = '', slice = 0
+          cmds.list.some((cmd, idx) => {
+            if ( (stack.length + (idx != 0 ? 1 : 0) + cmd.length) >= 127 )
+              return true
+            stack += (stack.length ? ';' : '') + cmds.list[idx]
+            slice++
+          })
+          cmds.list = cmds.list.slice(slice)
+          return stack;
+        }
         cmds.list = [];
         return r;
     }
@@ -2846,6 +2879,7 @@ function main(params) {
     if ( res && data ) {
       if ( res.headers['content-type'].indexOf('json') > 0 ) {
         var json = JSONparse(data, 'parcelOutRequests')
+        json.notice && ansiErrOut(DEBUG + 'notice: ' + RESET + util.inspect(json.notice, { depth: 10, colors: true, maxArrayLength: 100, compact: true, breakLength: 400}))
         if ( debug & d_JSONResponseInspector )
           ansiErrOut(DEBUG + 'Parceling, response #' + options.request + ': \n' + RESET + util.inspect(json, { depth: 10, color: true, showHidden: true})) 
         if ( cmdlist.dryrun.value.length > 0 ) {
@@ -2877,7 +2911,7 @@ function main(params) {
           return
         }
         rowsAvailableHint = undefined
-        if ( json.position && json.function ) {
+        if ( json.position && json.function && (parcelOut || cmds.list.length == 0) ) {
           let msg
           if ( json.function.functionName == 'ENTRY' )
             msg = ERROR + 'Function may not be authorized (EJES110) or may not be supported in the current environment (EJES029).  Use ' + ITEM + '--dry-run check' + ERROR + ' to verify.' + RESET
@@ -2912,6 +2946,7 @@ function main(params) {
       query += ( cmdlist.report.list || cmdlist.table.list || cmdlist.command.list ) ? ',linecommands' : ''
       query += ( cmdlist.report.list || cmdlist.table.list || cmdlist.command.list ) || ( cmdlist.select.list ) ? ',function' : ''
       query += ( cmdlist.select.list ) ? ',environment' : ''
+      debug & d_DisplayNotices && func != report && ( query += ',notice')
       options.path += options.query = query
       let enumeration = enumvalue > cmdlist.lines.maxLines ? cmdlist.lines.maxLines : enumvalue
       rowsAvailableHint && (enumeration = enumeration > rowsAvailableHint ? rowsAvailableHint : enumeration)
@@ -2922,7 +2957,8 @@ function main(params) {
     else { // Make request with parcelOutRequests as the callback.
       if ( debug & d_HostCmds )
         ansiErrOut(INFO + 'Next (E)JES command: ' + ITEM + next + RESET)
-      options.query = 'message,position,function'
+      options.query = 'message,position,function';
+      debug & d_DisplayNotices && ( options.query += ',notice')
       options.path += '?q=' + options.query //query
       options.post.execParms.enumValue = 0
       options.post.execParms.command = next + (next.slice(-6) == 'update' ? '' : ';update')
