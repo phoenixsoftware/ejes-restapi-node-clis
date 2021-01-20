@@ -8,11 +8,11 @@
 *
 * SPDX-License-Identifier: EPL-2.0
 *
-* Copyright (c) 2020 Phoenix Software International, Inc.
+* Copyright (c) 2020-2021 Phoenix Software International, Inc.
 *
 */
 
-const ejesVersion = 'EJES API, a CLI component of (E)JES.  V0.1.3'
+const ejesVersion = 'EJES API V0.1.3, a CLI component of (E)JES.'
 const https = require('https')
 const util = require('util')
 const fs = require('fs')
@@ -30,7 +30,7 @@ function main(params) {
       query: '',
       headers: { },
       post: { 
-        initParms: { columns: 80, rows: 24, userAgent: '' }, 
+        initParms: { columns: 80, rows: 24, userAgent: ejesVersion }, 
         execParms: { enumValue: 0, command: '' },
         platformEncoding: '1047'
       }
@@ -199,6 +199,7 @@ function main(params) {
       case '--showhiddencolumns':
       case '--translatescreen':
       case '--waitforresponse':
+      case '--useinternalconsole':
       case '--platformencoding':
         if ( i + 1 >= process.argv.length )
           msgToJsonAndExit('Argument required for ' + process.argv[i], 20)
@@ -336,7 +337,7 @@ function main(params) {
       opts.enumvalue && (options.post.execParms.enumValue = parseInt(opts.enumvalue))
       opts.showhiddencolumns && (options.post.execParms.showHiddenColumns = opts.showhiddencolumns)
       opts.translatescreen && (options.post.execParms.translateScreen = opts.translateacreen)
-      opts.useinternalconsole && (options.post.execParms.userAgent = opts.useragent)
+      opts.useinternalconsole && (options.post.execParms.useinternalconsole = opts.useinternalconsole)
       opts.waitforresponse && (options.post.execParms.waitForResponse = opts.waitforresponse)
       downloadSetup()
     }

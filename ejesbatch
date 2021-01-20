@@ -8,12 +8,12 @@
 *
 * SPDX-License-Identifier: EPL-2.0
 *
-* Copyright (c) 2020 Phoenix Software International, Inc.
+* Copyright (c) 2020-2021 Phoenix Software International, Inc.
 *
 */
 
 function main(params) {
-  const ejesVersion = 'EJES Batch, a CLI component of (E)JES.  V0.5.11'
+  const ejesVersion = 'EJES Batch V0.5.12, a CLI component of (E)JES.'
   
   const {writeJsonResponse, isPureNode, setZoweParams, setErrStrip, setOutStrip, ansiErrOut, ansiLogOut, errColorControl, getOutStrip, getErrStrip, setExitCode, setLocalConsole, setObj, setMessage, setZoweConsole, isResponseFormatJson, stripCodes, outColorControl } = require('./EjesLibrary/ansiOut')
   params &&  setZoweParams(params)

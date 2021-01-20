@@ -12,7 +12,7 @@
 *
 * SPDX-License-Identifier: EPL-2.0
 *
-* Copyright (c) 2020 Phoenix Software International, Inc.
+* Copyright (c) 2020-2021 Phoenix Software International, Inc.
 *
 */
 
@@ -22,7 +22,7 @@ require ('./EjesLibrary/debugCodes')
 var rl, timer
 const Reset =      "\x1b[0m"
 const FgCyan =     "\x1b[36m"
-const ejesVersion = 'EJES Interrupt Monitor, a CLI component of (E)Jes.  V0.3.2'
+const ejesVersion = 'EJES Interrupt Monitor V0.3.3, a CLI component of (E)Jes.'
 
 function zFill(n, c) { let s = n.toString(); return '0'.repeat((c || 2) - s.length) + s }
 function msDate() { let dt = new Date(); return zFill(dt.getHours()) + ':' + zFill(dt.getMinutes()) + ':' + zFill(dt.getSeconds()) + '.' + zFill(dt.getMilliseconds(), 3) }

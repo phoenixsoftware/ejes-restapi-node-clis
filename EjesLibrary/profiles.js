@@ -9,11 +9,11 @@
 *
 * SPDX-License-Identifier: EPL-2.0
 *
-* Copyright (c) 2020 Phoenix Software International, Inc.
+* Copyright (c) 2020-2021 Phoenix Software International, Inc.
 *
 */
 
-var ejesVersion = 'EJES Profiles, a CLI component of (E)JES.  V0.5.5'
+var ejesVersion = 'EJES Profiles V0.5.6, a CLI component of (E)JES.'
 var hideUserId = false
 const { readProfile, writeProfileFile } = require('./common')
 const { ansiErrOut, ansiLogOut, setErrStrip } = require('./ansiOut')
