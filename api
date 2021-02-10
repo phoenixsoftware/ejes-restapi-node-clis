@@ -12,7 +12,7 @@
 *
 */
 
-const ejesVersion = 'EJES API V0.1.3, a CLI component of (E)JES.'
+const ejesVersion = 'EJES API V0.1.4, a CLI component of (E)JES.'
 const https = require('https')
 const util = require('util')
 const fs = require('fs')

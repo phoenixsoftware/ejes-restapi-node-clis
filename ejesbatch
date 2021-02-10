@@ -13,7 +13,7 @@
 */
 
 function main(params) {
-  const ejesVersion = 'EJES Batch V0.5.12, a CLI component of (E)JES.'
+  const ejesVersion = 'EJES Batch V0.5.13, a CLI component of (E)JES.'
   
   const {writeJsonResponse, isPureNode, setZoweParams, setErrStrip, setOutStrip, ansiErrOut, ansiLogOut, errColorControl, getOutStrip, getErrStrip, setExitCode, setLocalConsole, setObj, setMessage, setZoweConsole, isResponseFormatJson, stripCodes, outColorControl } = require('./EjesLibrary/ansiOut')
   params &&  setZoweParams(params)
@@ -1456,20 +1456,21 @@ function main(params) {
               let json = JSONparse(data, 'debug & d_ResponseHeaders')
               ansiErrOut ({ status: json.status, statusMessage: json.statusMessage, elapsed: json.elapsed, returnCode: json.returnCode, reasonCode: json.reasonCode })
               let array = options.query.substring(3).split(',').sort()
-              let result = array.reduce((prev, current, idx) => {
-                idx > 0 && (prev += ITEM + ', ')
-                let item = json[current]
-                if ( ! item )
-                  return prev + ITEM + current + HILITE + ' (missing)' + RESET
-                let noLen = false
-                switch (current ) {
-                  case 'screen': item = json.screen.screenImage; break
-                  case 'message': item = (json.message && json.message.longMessages) ?  json.message.longMessages[0] : json.message.shortMessage; break
-                  case 'function': case 'position': case 'notice': noLen = true
-                }
-                prev += INFO + current + ': ' + ITEM + (item ? ('yes' + (noLen ? '' : '(len=' + item.length + ')')) : 'no')
-                return prev
-              }, 'Host query returned following queries: ')
+              result = util.inspect(json, { depth: 10, colors: true, maxArrayLength: options.post.execParms.enumValue, breakLength: 256, showHidden: true, compact: true})
+              // let result = array.reduce((prev, current, idx) => {
+              //   idx > 0 && (prev += ITEM + ', ')
+              //   let item = json[current]
+              //   if ( ! item )
+              //     return prev + ITEM + current + HILITE + ' (missing)' + RESET
+              //   let noLen = false
+              //   switch (current ) {
+              //     case 'screen': item = json.screen.screenImage; break
+              //     case 'message': item = (json.message && json.message.longMessages) ?  json.message.longMessages[0] : json.message.shortMessage; break
+              //     case 'function': case 'position': case 'notice': noLen = true
+              //   }
+              //   prev += INFO + current + ': ' + ITEM + (item ? ('yes' + (noLen ? '' : '(len=' + item.length + ')')) : 'no')
+              //   return prev
+              // }, 'Host query returned following queries: ')
               ansiErrOut(DEBUG + result + RESET)
             }
             debug & d_JSONResponseInspector && ansiErrOut(DEBUG + 'Response #' + options.request + RESET)
@@ -2058,7 +2059,7 @@ function main(params) {
               ansiErrOut(INFO + "Response to request " + ITEM + req.request + INFO + ": " + RESET)
               ansiErrOut(RESET + util.inspect(res.headers, true, 10, true)  + RESET)
             }
-            res.on('data', (chunk) => {debug & d_ResponseHeaders && ansiErrOut(JSONParse(chunk.toString(), 'onDataKeepAlive'))}) 
+            res.on('data', (chunk) => {debug & d_ResponseHeaders && ansiErrOut(JSONparse(chunk.toString(), 'onDataKeepAlive'))}) 
             res.on('end', () => { 
               debug & d_BatchKeepAlive && ansiErrOut(DEBUG + 'keepAlive.handler: nop completed.  Timer reset.' + RESET)
               keepAlive.resetTimer()
