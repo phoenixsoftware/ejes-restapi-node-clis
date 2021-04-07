@@ -16,7 +16,7 @@ const {writeJsonResponse, setZoweParams, isPureNode, setExitCode, setErrStrip, s
 require('./EjesLibrary/debugCodes.js')
 function main(params) {
 
-  const ejesVersion = 'EJES Query V0.4.13, a CLI component of (E)JES.'
+  const ejesVersion = 'EJES Query V0.4.14, a CLI component of (E)JES.'
   const auth = require('./EjesLibrary/auth')
   const { debugRequest, debugResponse, getClientDateStamp, term, JSONparse } = require('./EjesLibrary/common.js')
   const https = require('https')
@@ -2472,7 +2472,7 @@ function main(params) {
             lines: [ { label: 'StepName', len: 8 }, { label: 'ProcName', len: 8} ]
       },
       { display: ['ENQ'],
-            lines: [ { label: 'QName', len: 32 }, { label: 'Resource-Name', len: 8 } ]
+            lines: [ { label: 'QName', len: 8 }, { label: 'Resource-Name', len: 32 } ]
       },
       { display: ['ENCLAVE'],
             lines: [ { label: 'OwnJob', len: 8 } ]
