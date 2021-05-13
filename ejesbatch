@@ -13,7 +13,7 @@
 */
 
 function main(params) {
-  const ejesVersion = 'EJES Batch V0.5.13, a CLI component of (E)JES.'
+  const ejesVersion = 'EJES Batch V0.5.14, a CLI component of (E)JES.'
   
   const {writeJsonResponse, isPureNode, setZoweParams, setErrStrip, setOutStrip, ansiErrOut, ansiLogOut, errColorControl, getOutStrip, getErrStrip, setExitCode, setLocalConsole, setObj, setMessage, setZoweConsole, isResponseFormatJson, stripCodes, outColorControl } = require('./EjesLibrary/ansiOut')
   params &&  setZoweParams(params)
@@ -1837,9 +1837,9 @@ function main(params) {
                 logAttrSkipped = false
                 let loginfo = json.loginfo[dataLine++]
                 if ( logattr && dataLine ) {
-                  l = line.join('').replace(/\u0003/g, ' ' + HardReset + FgBlack + '\x1b[' + '48' + ';5;' + spectrum['white']['high'] + 'm').replace(/\u0002/g, HardReset + (loginfo.highlight == 'reverse' ? FgBlack : '') + '\x1b[' + (loginfo.highlight == 'reverse' ? '48' : '38') + ';5;' + spectrum[loginfo.color][loginfo.intensity] + 'm ' )
+                  l = line.join('').replace(/\u0003/g, ' ' + HardReset + FgBlack + '\x1b[' + '48' + ';5;' + spectrum['white']['high'] + 'm').replace(/\u0002/g, HardReset + (loginfo.highlight == 'reverse' ? FgBlack : '') + '\x1b[' + (loginfo.highlight == 'reverse' ? '48' : '38') + ';5;' + spectrum[loginfo.color][loginfo.intensity] + 'm' + (loginfo.highlight === "normal" ? "\x1b[48;5;232m" : "") + ' ')
                 }
-                l = HardReset + (loginfo.highlight == 'reverse' ? FgBlack : '') + '\x1b[' + (loginfo.highlight == 'reverse' ? '48' : '38') + ';5;' + spectrum[loginfo.color][loginfo.intensity] + 'm' + l + HardReset + RESET
+                l = HardReset + (loginfo.highlight == 'reverse' ? FgBlack : '') + '\x1b[' + (loginfo.highlight == 'reverse' ? '48' : '38') + ';5;' + spectrum[loginfo.color][loginfo.intensity] + 'm' + (loginfo.highlight === 'underscore' ? '\x1b[48;5;232m\x1b[4m' : '') + l + HardReset + RESET
                 beep = alarm && ! beeped  && ! getErrStrip() && loginfo.control == 'alarm'
               }
             }
