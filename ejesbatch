@@ -13,7 +13,7 @@
 */
 
 function main(params) {
-  const ejesVersion = 'EJES Batch V0.5.14, a CLI component of (E)JES.'
+  const ejesVersion = 'EJES Batch V0.5.15, a CLI component of (E)JES.'
   
   const {writeJsonResponse, isPureNode, setZoweParams, setErrStrip, setOutStrip, ansiErrOut, ansiLogOut, errColorControl, getOutStrip, getErrStrip, setExitCode, setLocalConsole, setObj, setMessage, setZoweConsole, isResponseFormatJson, stripCodes, outColorControl } = require('./EjesLibrary/ansiOut')
   params &&  setZoweParams(params)
@@ -159,6 +159,10 @@ function main(params) {
           case '-2': case '--jes2': case '-3': case '--jes3':
             subsystem = 'JES' + argv[i].slice(-1)
             i + 1 < argv.length && ! argv[i + 1].startsWith('-') && i++  // Argument optional and ignored.
+            break
+          case '--subsystem':
+            subsystem = validateOrExit(i, argv, () => { let val; return argv[i + 1].length === 0 }).toUpperCase();
+            ++i
             break
           case '--ejes-p': case '--ejes-profile':
            zoweProfile = argv[i + 1] // Fallthru
@@ -777,6 +781,7 @@ function main(params) {
                 '    -V,    --version                 version info\n' +
                 '    -2,    --jes2                    start with the JES2 spooler instead of the default spooler.\n' +
                 '    -3,    --jes3                    start with the JES3 or JES3plus spooler instead of the default spooler.\n' +
+                '           --subsystem               specify the name of an arbitrarily named spool subsystem.\n' + 
                 '\n' +
                 'You may optionally redirect stdout, stderr, and stdin.  You may pipe stdout to another program.\n' + 
                 '    stdout               host output and the result of the ' + INFO + 'download' + RESET +' meta command\n' +
@@ -1839,7 +1844,7 @@ function main(params) {
                 if ( logattr && dataLine ) {
                   l = line.join('').replace(/\u0003/g, ' ' + HardReset + FgBlack + '\x1b[' + '48' + ';5;' + spectrum['white']['high'] + 'm').replace(/\u0002/g, HardReset + (loginfo.highlight == 'reverse' ? FgBlack : '') + '\x1b[' + (loginfo.highlight == 'reverse' ? '48' : '38') + ';5;' + spectrum[loginfo.color][loginfo.intensity] + 'm' + (loginfo.highlight === "normal" ? "\x1b[48;5;232m" : "") + ' ')
                 }
-                l = HardReset + (loginfo.highlight == 'reverse' ? FgBlack : '') + '\x1b[' + (loginfo.highlight == 'reverse' ? '48' : '38') + ';5;' + spectrum[loginfo.color][loginfo.intensity] + 'm' + (loginfo.highlight === 'underscore' ? '\x1b[48;5;232m\x1b[4m' : '') + l + HardReset + RESET
+                l = HardReset + (loginfo.highlight == 'reverse' ? FgBlack : '') + (loginfo.highlight == 'underscore' ? '\x1b[48;5;232m\x1b[4m' : '') + '\x1b[' + (loginfo.highlight == 'reverse' ? '48' : '38') + ';5;' + spectrum[loginfo.color][loginfo.intensity] + 'm' + l + HardReset + RESET
                 beep = alarm && ! beeped  && ! getErrStrip() && loginfo.control == 'alarm'
               }
             }

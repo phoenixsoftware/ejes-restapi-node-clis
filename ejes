@@ -12,11 +12,11 @@
 *
 */
 
-const {writeJsonResponse, setZoweParams, isPureNode, setExitCode, setErrStrip, setOutStrip, getErrStrip, getOutStrip, ansiErrOut, ansiLogOut, setObj, isResponseFormatJson, stripCodes} = require('./EjesLibrary/ansiOut')
+const {writeJsonResponse, setZoweParams, isPureNode, setExitCode, setErrStrip, setOutStrip, getErrStrip, getOutStrip, ansiErrOut, ansiLogOut, setObj, isResponseFormatJson, stripCodes, setMessage} = require('./EjesLibrary/ansiOut')
 require('./EjesLibrary/debugCodes.js')
 function main(params) {
 
-  const ejesVersion = 'EJES Query V0.4.15, a CLI component of (E)JES.'
+  const ejesVersion = 'EJES Query V0.4.16, a CLI component of (E)JES.'
   const auth = require('./EjesLibrary/auth')
   const { debugRequest, debugResponse, getClientDateStamp, term, JSONparse } = require('./EjesLibrary/common.js')
   const https = require('https')
@@ -572,6 +572,19 @@ function main(params) {
       'EXAMPLE: ' + FLAG + '--jes3' + RESET,
       value: []
     },
+    subsystem: {  
+      long: '--subsystem',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
+      list: false, doList: (item) => {
+        ansiLogOut('Value   Description   (' + item + ')')
+        ansiLogOut('------  -----------')
+        ansiLogOut('string  Spooler subsystem name')
+      },
+      usage: '[--subsystem [' + Underscore + 'spooler-name' + NoUnderscore + ' | 1 ]',
+      help: 'Name of the spooler to use instead of the default spooler.  This value is converted to upper case.\n\n' +
+      'EXAMPLE: ' + FLAG + '--subsystem JES3' + RESET,
+      value: [],
+    },
     version: {  
       short: '-v', long: '--version', camel: '-V',
       tokens: [], defaultValue: 'false', maxOptionRepeat: 1, minArgumentCount: 0, maxArgumentCount: 1,
@@ -769,8 +782,8 @@ function main(params) {
           })
         }
         catch(err) {
-          ansiErrOut(ERROR + 'Error trying to read profile directory while trying to list profiles.' + RESET)
-          ansiErrOut(err)
+          ansiErrOut(ERROR + setMessage('Error trying to read profile directory while trying to list profiles.') + RESET)
+          ansiErrOut(setObj(err).message || err)
         }
       },
       usage: '[[--p | --prof | --profile] ' + Underscore + 'profile-name' + NoUnderscore + ']',
@@ -778,8 +791,8 @@ function main(params) {
       'EXAMPLE: ' + FLAG + '--profile jes3plus' + RESET,
       value: [],
       after: (cmd) => { 
-        if ( cmd.value.length == 0 || ! fs.existsSync(os.homedir() + '/.ejes/profile/' + cmd.value[0])) {
-          ansiErrOut('ERROR: --profile requires the name of an existing profile.  Use list argument.  Do not specify the extension or path.')
+        if ( cmd.value.length == 0 || ! fs.exists.Sync(os.homedir() + '/.ejes/profile/' + cmd.value[0])) {
+          ansiErrOut(setMessage('ERROR: --profile requires the name of an existing profile.  Use list argument.  Do not specify the extension or path.'))
           term.exitNow(56, true)
         }
       }
@@ -1469,7 +1482,7 @@ function main(params) {
         'USAGE:   ejes [' + DEFAULT + 'query' + RESET + ' | q] [' + Underscore + 'table-name' + NoUnderscore + ' | ' + DEFAULT + 'status' + RESET + '] [' + Underscore + 'options...' + NoUnderscore + '|' + DEFAULT + '--owner ' + Underscore + 'your-userid' + NoUnderscore + RESET + ']\n' +
         '         ejes [batch | b] [' + Underscore + 'table-name' + NoUnderscore + ' | shell | cmd] [' + Underscore + 'ejes-batch-options*...' + NoUnderscore + RESET + ']\n' +
         '         ejes profiles** ' + Underscore + 'action' + NoUnderscore + RESET + ' [' + Underscore + 'profile-name' + NoUnderscore + RESET + '] ' + Underscore + 'option...' + NoUnderscore + RESET + '\n' +
-        '         *  Note: Ejes batch options are different from those below.  Use "ejes emulate batch --help" to view usage.\n' + 
+        '         *  Note: Ejes batch options are different from those below.  Use "ejes batch shell --help" to view usage.\n' + 
         '         ** Note: Ejes profiles takes positional parameters and different arguments.  Use "ejes profiles --help" to view usage.\n\n' + 
         'EXAMPLE: ejes query activity       Displays the activity table for your user id.\n' +
         '         ejes activity             Same (not for use under Zowe).\n' +
@@ -1485,7 +1498,7 @@ function main(params) {
       ansiErrOut('\nRepeatable options applicable for each table in the stack.  (Use --help repeat for additional help.)\n');
       usageOf(['metafilter', 'select', 'sort', 'table', 'dest', 'jobname', 'origin', 'owner', 'jobclass', 'sysclass', 'usr','atx', 'job', 'stc', 'tsu'])
       ansiErrOut('\nReport options\n');
-      usageOf(['start', 'cc'])
+      usageOf(['start', 'cc', 'text', 'pdf'])
       ansiErrOut('\nOptions for the output table contents and columns\n');
       usageOf(['acplex', 'curstep', 'datefmt', 'header', 'hidecols', 'max', 'numchar', 'setup', 'showcols', 'sysname'])
       ansiErrOut('\nLimiting options\n');
@@ -1739,7 +1752,18 @@ function main(params) {
             ansiErrOut(INFO + 'Download to file ' + ITEM + file + INFO + ' requested.' + RESET)
         }
         catch(e) {
-          ansiErrOut(e.message || e)
+          isDownload = false;
+          ansiErrOut(ERROR + setMessage('Download file accessment failed.') + RESET);
+          ansiErrOut(setobj(e).message || e)
+          return term.exitNow(37)
+        }
+        try {
+          fs.appendFileSync(file, "")
+        }
+        catch(e) {
+          isDownload = false;
+          ansiErrOut(ERROR + setMessage('Could not open download file for append.') + RESET);
+          ansiErrOut(setObj(e).message || e)
           return term.exitNow(37)
         }
       }
@@ -1761,7 +1785,7 @@ function main(params) {
                 fs.appendFileSync(file, chunk)
               }
               catch(e) {
-                ansiLogOut(e.message || e)
+                ansiLogOut(setObj(e).message || e)
                 return term.exitNow(37)
               }
             }
@@ -1774,8 +1798,8 @@ function main(params) {
                     fs.appendFileSync(file, line)
                   }
                   catch(e) {
-                    ansiErrOut(e.message || e)
-                    return term.exitNow(37)
+                    ansiErrOut(setObj(e).message || e)
+                    return term.exitNow(37);
                   }
               else
                 lineOut(line, false, 'report') 
@@ -1812,9 +1836,9 @@ function main(params) {
                   download.chunks++
                 }
                 catch(e) {
-                  ansiErrOut(e.message || e)
+                  ansiErrOut(setObj(e).message || e)
                   return term.exitNow(37)
-                }
+            }
               }
               else {  
                 let lines = data.split('\n')
@@ -1824,7 +1848,7 @@ function main(params) {
                       fs.appendFileSync(file, line)
                     }
                     catch(e) {
-                      ansiErrOut(e.message || e)
+                      ansiErrOut(setObj(e).message || e)
                       return term.exitNow(37)
                     }
                   else
@@ -1880,7 +1904,7 @@ function main(params) {
   function listError(json, errorsOnly) {
     if ( json.message && json.message.longMessages && json.message.longMessages.length > 0 ) {
       if ( ! errorsOnly || json.message.isErrorMessage )
-        ansiErrOut((json.message.isErrorMessage ? ERROR : MSG) + json.message.longMessages[0] + RESET)
+        ansiErrOut((json.message.isErrorMessage ? ERROR : MSG) + setMessage(json.message.longMessages[0]) + RESET)
       term.setAdditiveExitCode(json)
       return json.message.isErrorMessage
     }
@@ -2349,8 +2373,8 @@ function main(params) {
   function parseQueryAuthDisplay(data) {
     var json = JSONparse(data, 'parseQueryAuthDisplay', 47, 'This error occurred while trying to check authorized tables.')
     if ( ! json.message || json.status != 200 ) {
-      ansiErrOut(ERROR + 'Error trying to check authorized tables.  Likely bad credentials.' + RESET)
-      ansiErrOut(util.inspect(json, true, 10, true))
+      ansiErrOut(ERROR + setMessage('Error trying to check authorized tables.  Likely bad credentials.') + RESET)
+      ansiErrOut(setObj(json).errorMessage || util.inspect(json, true, 10, true))
       term.exitNow(33, true)  // Strands session; too deep in async handler, so hard exit.
     }
     if ( json.message.longMessages.length > 0 ) {
@@ -2378,7 +2402,7 @@ function main(params) {
       defaultUse.length == 0 && (defaultUse = authList[0].panel)
     }
     if ( defaultUse.length == 0 ) {
-      ansiErrOut(ERROR + 'You are not authorized to use any primary display tables.  No useful work can be performed.' + RESET)
+      ansiErrOut(ERROR + setMessage('You are not authorized to use any primary display tables.  No useful work can be performed.') + RESET)
       term.exitNow(28, false)  // Strands session; see above.
     }
   }
@@ -2594,7 +2618,7 @@ function main(params) {
     list: [],
     push: (command) => {
       if ( command.length > 127 ) {
-        ansiErrOut(ERROR + 'Options compiled down to a host command created a command that exceeds a 127-character host limit.')
+        ansiErrOut(ERROR + setMessage('Options compiled down to a host command created a command that exceeds a 127-character host limit.') + RESET)
         ansiErrOut(MSG + 'Check option arguments to simplify.  Ensure correct placement of double-quotes.')
         ansiErrOut(MSG + 'If problem persists, contact technical support.')
         ansiErrOut(FLAG + 'Compiled command: ' + ITEM + command + RESET)
@@ -3044,7 +3068,7 @@ function main(params) {
   if ( process.argv[1].substring(process.argv[1].length - 4) != 'ejes' ) { // Running under Zowe?
     debug & d_ProfileDump && ansiErrOut(DEBUG + 'Running under Zowe.' + RESET)
     if ( ! params || ! params.arguments ) {
-      ansiErrOut(ERROR + 'No parameters from Zowe.  Is Zowe being bypassed or the plugin improperly installed?' + RESET)
+      ansiErrOut(ERROR + setMessage('No parameters from Zowe.  Is Zowe being bypassed or the plugin improperly installed?') + RESET)
       return term.exitNow(57)
     }
     parameterList = params.arguments.parameterList ? params.arguments.parameterList : ''
@@ -3148,6 +3172,7 @@ function main(params) {
 
   cmdlist.jes2.value.length > 0 && (options.post.initParms.subsystem = 'JES2')
   cmdlist.jes3.value.length > 0 && (options.post.initParms.subsystem = 'JES3')
+  cmdlist.subsystem.value.length && (options.post.initParms.subsystem = cmdlist.subsystem.value[0].toUpperCase())
   options.post.platformEncoding = cmdlist.codepage.value.length > 0 ? options.post.platformEncoding = cmdlist.codepage.value[0] : '1047'
 
   if ( cmdlist.submit.value.length > 0 ) {

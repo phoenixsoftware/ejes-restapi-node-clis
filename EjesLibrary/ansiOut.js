@@ -75,12 +75,14 @@ function setObj (o) {
   if ( params ) {
     setObjLocalCopy(o, true)
   }
+  return o;
 }
 
 function setMessage(text) {  // No support for the "values" advertised in doc as no explanation how that works.
   if ( params ) {
     params.response.data.setMessage(text)
   }
+  return text;
 }
 
 function setExitCode(number) {  // No support for the "values" advertised in doc as no explanation how that works.
@@ -88,6 +90,7 @@ function setExitCode(number) {  // No support for the "values" advertised in doc
   if ( params ) {
     params.response.data.setExitCode(number)
   }
+  return number;
 }
 
 function stripCodes(line) {

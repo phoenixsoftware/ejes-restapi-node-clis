@@ -1,6 +1,6 @@
 {
   "name": "@phoenixsoftware/ejes-restapi-node-clis",
-  "version": "0.2.22",
+  "version": "0.2.23",
   "description": "Enables the EJES API, EJES BATCH, EJES Profile, EJES QUERY commands.",
   "main": "ejes",
   "scripts": {

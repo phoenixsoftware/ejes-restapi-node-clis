@@ -17,6 +17,7 @@ const os = require('os')
 const util = require('util')
 const https = require('https')
 const { ansiErrOut } = require('./ansiOut')
+const { writeJsonResponse } = require('./ansiOut')
 
 require('./ansiCodes')
 require('./auth')
@@ -266,6 +267,7 @@ const term = {
   exitNow: function(exitCode, force) {
     this.signal = true
     setExitCode(process.exitCode = exitCode)
+    writeJsonResponse();
     if ( ! force && ! term.terminated ) {
       term.logoff()
       if ( force == false )
