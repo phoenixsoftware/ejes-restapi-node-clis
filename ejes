@@ -16,7 +16,7 @@ const {writeJsonResponse, setZoweParams, isPureNode, setExitCode, setErrStrip, s
 require('./EjesLibrary/debugCodes.js')
 function main(params) {
 
-  const ejesVersion = 'EJES Query V0.4.16, a CLI component of (E)JES.'
+  const ejesVersion = 'EJES Query V0.4.17, a CLI component of (E)JES.'
   const auth = require('./EjesLibrary/auth')
   const { debugRequest, debugResponse, getClientDateStamp, term, JSONparse } = require('./EjesLibrary/common.js')
   const https = require('https')
@@ -2563,6 +2563,9 @@ function main(params) {
       },
       { display: ['SPVOL'],
             lines: [ {label: 'SpoolDD', len: 8} ]
+      },
+      { display: ['SUBSYS'],
+            lines: [ {label: 'Name', len: 8}, {label: 'Sysname', len: 16} ]
       },
       { display: ['SYMBOL'],
             lines: [ {label: 'Name', len: 18} ]

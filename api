@@ -12,12 +12,15 @@
 *
 */
 
-const ejesVersion = 'EJES API V0.1.4, a CLI component of (E)JES.'
+const ejesVersion = 'EJES API V0.2.1, a CLI component of (E)JES.'
 const https = require('https')
 const util = require('util')
 const fs = require('fs')
 const auth = require('./EjesLibrary/auth')
 const common = require('./EjesLibrary/common')
+var writeCookieToFile = false
+var pin = ''
+var note
 function main(params) {
   var debugObj = {}
   var opts = { 
@@ -69,7 +72,7 @@ function main(params) {
 
   function msgToJsonAndExit(msg, exitCode) {
     outputResults(msg, exitCode)
-    //process.exit()
+    process.exit()
   }
 
   function outputResults(json, exitCode = 0) {
@@ -77,6 +80,7 @@ function main(params) {
     Object.entries(debugObj).length > 0 && ( debugObj.process = { argv: process.argv }) && (json.debug = debugObj)
     process.exitCode = json.exitCode = exitCode
     json.ejesVersion = ejesVersion
+    note && (json.note = note)
     params && (params.response.data.setExitCode(exitCode))
     if ( opts.rfj || opts.debug || exitCode > 0 || (params && params.arguments.rfj) || process.argv.some((item) => { return item == '--rfj' || item == '--response-format-json' })) {
       if ( params ) {
@@ -93,7 +97,7 @@ function main(params) {
   function helpAndExit() {
     let how = (ejes && ! ejes.zowe && ejes.hostname && ejes.port && ejes.basePath) ? ('on your server at https:/' + ejes.hostname + ':' + ejes.port + '/EjesWeb/swagger') : 'to the swagger documentation'
     let h = 'USAGE ejes api command [options]\n\n' +  // The folowing text up to additional options is quoted from chapter 10.
-    'This command group is a thin layer over the (E)JES REST API.  Refer to chapter 10 and ' + how + ' for additional information.\n\nOptions are mapped from the object property models for execParms, initParms, mail, pdf, platformEncoding, and text.  Code all options in lowercase for Zowe compatibility.  The query parameters c, d, q, and m map to -c, -d, -q, and -m respectively.  Only the last element of an object property is mapped.  For example, pdf.security.allowCopying maps to --allowcopying.  Provide the proper object property type as the option argument.  Strings with spaces or shell-specific characters must be properly quoted.\n\nThe exception to direct mapping is mail.cc, which maps to --carboncopy.  The extended option --commanddatafile reads a JCL file for submission, while the mapped --commanddata option accepts a string with "\\n" line separators.  The extended option --bodyfile reads the body of an email from a file, while the mapped --body option accepts a string with "\\n" line separators.   If EJES_SUBMIT_PATH is set in the environment, it will be used for creating the path to the either file, otherwise the file is expected in the current working directory.\n\nThe first init command in a session will return a cookie, creating a stateful session.  Use the --cookie option in subsequent transactions to reference the same session.  If not referenced within two minutes, the session will automatically close.  The cookie specified on the --cookie option is returned in all stateful transactions for convenience.\n\nBy default, the CLI returns only the cookie, and only if the session is stateful.  An exit code of 0 means the transaction succeeded.  To visualize the data, use the --response-format-json (--rfj) option with no argument.  A non-zero exit code automatically returns JSON (as does the --debug option).  If you include the host command "return" in the --command string, the session terminates with a 500 return code.  This 500 exit code is considered normal, but you will not receive any query data.  To avoid this, plan to use a separate term request, or use a stateless exec request.\n\nDownloads are always saved to a file suggested by the underlying API.  JSON output for a download includes the status and the path to the file where the data was saved.  If EJES_DOWNLOAD_PATH is set in the environment, it will be used for creating the path to the file, otherwise the download is to the current working directory.\n\n' +
+    'This command group is a thin layer over the (E)JES REST API.  Refer to chapter 10 in the (E)JES Reference and ' + how + ' for additional information.\n\nOptions are mapped from the object property models for execParms, initParms, mail, pdf, platformEncoding, and text.  Code all options in lowercase for Zowe compatibility.  The query parameters c, d, q, and m map to -c, -d, -q, and -m respectively.  Only the last element of an object property is mapped.  For example, pdf.security.allowCopying maps to --allowcopying.  Provide the proper object property type as the option argument.  Strings with spaces or shell-specific characters must be properly quoted.\n\nThe exception to direct mapping is mail.cc, which maps to --carboncopy.  The extended option --commanddatafile reads a JCL file for submission, while the mapped --commanddata option accepts a string with "\\n" line separators.  The extended option --bodyfile reads the body of an email from a file, while the mapped --body option accepts a string with "\\n" line separators.   If EJES_SUBMIT_PATH is set in the environment, it will be used for creating the path to the file, otherwise the file is expected in the current working directory.\n\nThe first init command in a session will return a cookie, creating a stateful session.  Use the --cookie option in subsequent transactions to reference the same session.  If not referenced within two minutes, the session will automatically close.  The cookie specified on the --cookie option is returned in all stateful transactions for convenience.  The CLI can manage a stateful cookie transaction proactively.  On the init, specify --cookie write or --cookie write-pin where pin can be any alphanumeric string.  On the exec, cancel-download, and term specify --cookie read or --cookie read-pin.  The cookie generated by the host is managed in the user\'s work directory.  A pin is required only when there are multiple simultaneous sessions.\n\nBy default, the CLI returns only the cookie, and only if the session is stateful.  An exit code of 0 means the transaction succeeded.  To visualize the data, use the --response-format-json (--rfj) option with no argument.  A non-zero exit code automatically returns JSON (as does the --debug option).  If you include the host command "return" in the --command string, the session terminates with a 500 return code.  This 500 exit code is considered normal, but you will not receive any query data.  To avoid this, plan to use a separate term request, or use a stateless exec request.\n\nDownloads are always saved to a file suggested by the underlying API.  JSON output for a download includes the status and the path to the file where the data was saved.  If EJES_DOWNLOAD_PATH is set in the environment, it will be used for creating the path to the file, otherwise the download is to the current working directory.\n\n' +
     'In addition, the following profile options are available:\n\n' +
     '  --host                 host name without a path\n' +
     '  --basePath             the path component of the address\n' +
@@ -101,9 +105,9 @@ function main(params) {
     '  --rejectUnauthorized   reject self-signed certificates\n' +
     '  --user                 host user id (overrides profile)\n' +
     '  --password             host password (overrides profile)\n' +
-    '  --authorization        base64 encoded user:password string,\n' +
+    '  --authorization        base64 encoded user:password or user:group:password string,\n' +
     '                         overrides profile and --user and --password,\n' +
-    '                         not necessary with profiles\n' +
+    '                         not necessary with profiles or a cookie\n' +
     'and\n\n' + 
     '  --debug                additive flag for tech support use\n' +
     '                           1 - Command discovered and compiled options object\n' +
@@ -210,6 +214,34 @@ function main(params) {
       default:
         msgToJsonAndExit(process.argv[i] + ' is not a valid option', 31)
       }
+    }
+
+    if ( command == 'init' && opts.cookie ) {
+      if ( opts.cookie.toLowerCase().startsWith('read') )
+        msgToJsonAndExit('The argument "read" is not valid on init command.  Use "write".', 77)
+      if ( opts.cookie.toLowerCase().startsWith('write') ) {
+        writeCookieToFile = true;
+        if ( opts.cookie.length > 5 )
+          pin = opts.cookie.substring(5)
+        delete opts.cookie
+      }
+    }
+    else {
+      function deleteCookie (suffix) {
+        if ( fs.existsSync(pathWork + 'cookie' + suffix + '.tmp') ) {
+          fs.unlinkSync(pathWork + 'cookie' + suffix + '.tmp')
+          ! note && (note = "");
+          note += "Deleted saved cookie."
+        }
+      }
+      if ( opts.cookie && opts.cookie.toLowerCase().startsWith('read') && fs.existsSync (pathWork + 'cookie' + (pin = opts.cookie.substring(4)) + '.tmp') ) {
+        opts.cookie = fs.readFileSync(pathWork + 'cookie' + pin + '.tmp').toString()
+        note = "Read saved cookie.  "
+        if ( command == 'term' )
+          deleteCookie(pin)
+      }
+      else
+        deleteCookie('') // keep directory clean
     }
 
     opts.debug & 1 && (debugObj.command = command)
@@ -391,8 +423,15 @@ function main(params) {
     https.request(options, (res) => {
       var txt = false, pdf = false, file, existingFileReplaced = false, downloadPath = '', data = '', size = 0; startTime = Date.now()
       opts.debug & 4 && (debugObj.responseHeaders = res.headers)
-      if ( res.headers['set-cookie'] )
+      if ( res.headers['set-cookie'] ) {
         cookie = res.headers['set-cookie'][0]
+        if ( fs.existsSync(pathWork + 'cookie' + pin + '.tmp') )
+          fs.unlinkSync(pathWork + 'cookie' + pin + '.tmp')
+        if ( writeCookieToFile ) {
+          fs.writeFileSync(pathWork + 'cookie' + pin + '.tmp', cookie)
+          note = "Wrote saved cookie."
+        }
+      }
       else
         opts.cookie && (cookie = opts.cookie)
       options.execParms && options.execParms.commmandData && delete options.execParms.commmandData

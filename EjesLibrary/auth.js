@@ -52,6 +52,9 @@ options = {
 
 forceNoColor = false
 noColor = false
+pathHome = os.homedir() + '/.ejes/'
+pathProfile = pathHome + 'profile/'
+pathWork = pathHome + 'work/'
 
 function getDefaultProfile() {
   var defaultProfile = 'ejes'
