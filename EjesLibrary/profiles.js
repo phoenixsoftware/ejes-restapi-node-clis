@@ -13,7 +13,7 @@
 *
 */
 
-var ejesVersion = 'EJES Profiles V0.5.6, a CLI component of (E)JES.'
+var ejesVersion = 'EJES Profiles V0.6.0, a CLI component of (E)JES.'
 var hideUserId = false
 const { readProfile, writeProfileFile } = require('./common')
 const { ansiErrOut, ansiLogOut, setErrStrip } = require('./ansiOut')

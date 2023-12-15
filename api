@@ -8,11 +8,11 @@
 *
 * SPDX-License-Identifier: EPL-2.0
 *
-* Copyright (c) 2020-2021 Phoenix Software International, Inc.
+* Copyright (c) 2020-2023 Phoenix Software International, Inc.
 *
 */
 
-const ejesVersion = 'EJES API V0.2.1, a CLI component of (E)JES.'
+const ejesVersion = 'EJES API V0.3.0, a CLI component of (E)JES.'
 const https = require('https')
 const util = require('util')
 const fs = require('fs')

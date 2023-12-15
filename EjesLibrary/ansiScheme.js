@@ -8,11 +8,11 @@
 *
 * SPDX-License-Identifier: EPL-2.0
 *
-* Copyright (c) 2020-2021 Phoenix Software International, Inc.
+* Copyright (c) 2020-2023 Phoenix Software International, Inc.
 *
 */
 
-const ejesVersion = 'EJES Ansi Scheme Compilier V0.1.6, a CLI component of (E)JES.'
+const ejesVersion = 'EJES Ansi Scheme Compilier V0.2.0, a CLI component of (E)JES.'
 function readSchemeFile(schemeFile = 'dark', show = false, update = false) {
   require('./ansiCodes.js')
   const { ansiLogOut, ansiErrOut } = require('./ansiOut.js')

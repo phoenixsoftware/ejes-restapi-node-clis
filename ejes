@@ -8,7 +8,7 @@
 *
 * SPDX-License-Identifier: EPL-2.0
 *
-* Copyright (c) 2020-2021 Phoenix Software International, Inc.
+* Copyright (c) 2020-2023 Phoenix Software International, Inc.
 *
 */
 
@@ -16,7 +16,7 @@ const {writeJsonResponse, setZoweParams, isPureNode, setExitCode, setErrStrip, s
 require('./EjesLibrary/debugCodes.js')
 function main(params) {
 
-  const ejesVersion = 'EJES Query V0.4.17, a CLI component of (E)JES.'
+  const ejesVersion = 'EJES Query V0.5.00, a CLI component of (E)JES.'
   const auth = require('./EjesLibrary/auth')
   const { debugRequest, debugResponse, getClientDateStamp, term, JSONparse } = require('./EjesLibrary/common.js')
   const https = require('https')
@@ -710,6 +710,15 @@ function main(params) {
       usage: '[--ejes-p | --ejes-profile]',
       help: hfmt('Zowe runtime profile selection.  Use ~--profile` when running under pure node. ') + '\n' +
       'EXAMPLE: ' + FLAG + '--ejes-profile jes2' + RESET,
+      value: []
+    },
+    zoweDaemnon: {  
+      zowe: '--daemon',
+      tokens: [], defaultValue: '', maxOptionRepeat: 1, minArgumentCount: 1, maxArgumentCount: 1,
+      list: false,
+      usage: '[--daemon]',
+      help: hfmt('This is not a user option. Don\'t code it') + '\n' +
+      'EXAMPLE: ' + FLAG + '--daemon' + RESET,
       value: []
     },
     dryrun: {  
